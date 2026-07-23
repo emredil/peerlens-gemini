@@ -35,9 +35,11 @@ class RefereeReport:
     math_verdict: Verdict = "insufficient_data"
     novelty_verdict: Verdict = "insufficient_data"
     structure_verdict: Verdict = "insufficient_data"
+    domain_verdict: Verdict = "insufficient_data"
     math_json: dict = field(default_factory=dict)
     novelty_json: dict = field(default_factory=dict)
     structure_json: dict = field(default_factory=dict)
+    domain_json: dict = field(default_factory=dict)
 
 
 VERDICT_SEVERITY = {
@@ -55,6 +57,23 @@ VERDICT_HEADLINES = {
     "clean":    "The manuscript passes automated math and novelty checks.",
     "insufficient_data": "Insufficient signal was extracted for a full automated review; a human referee should assess this paper directly.",
 }
+
+
+def _domain_verdict(domain: dict) -> tuple[Verdict, str]:
+    """Compute a verdict from a DomainReport dict."""
+    if not domain:
+        return "insufficient_data", "No domain-expert analysis available."
+    findings = domain.get("findings", [])
+    if not findings:
+        return "clean", "No domain-specific concerns identified."
+    counts = {"critical": 0, "warning": 0, "info": 0}
+    for f in findings:
+        counts[f.get("severity", "info")] = counts.get(f.get("severity", "info"), 0) + 1
+    if counts["critical"] > 0:
+        return "critical", f"{counts['critical']} critical domain concern(s)."
+    if counts["warning"] > 0:
+        return "major", f"{counts['warning']} domain-specific clarification(s) requested."
+    return "minor", "Only informational domain notes recorded."
 
 
 def _structure_verdict(structure: dict) -> tuple[Verdict, str]:
@@ -125,14 +144,26 @@ def aggregate_full(doi_label: str) -> RefereeReport:
             structure_json = {}
     structure_verdict, structure_reason = _structure_verdict(structure_json)
 
-    overall = _combine_verdicts(math_rep.verdict, novelty_verdict, structure_verdict)
+    # Domain
+    dom_path = processed / "domain_reports" / f"{doi_label}.json"
+    domain_json: dict = {}
+    if dom_path.exists():
+        try:
+            domain_json = _json_stdlib.loads(dom_path.read_text())
+        except _json_stdlib.JSONDecodeError:
+            domain_json = {}
+    domain_verdict, domain_reason = _domain_verdict(domain_json)
+
+    overall = _combine_verdicts(math_rep.verdict, novelty_verdict, structure_verdict, domain_verdict)
 
     if math_rep.verdict == overall:
         overall_reason = f"Math: {math_rep.verdict_reason}"
     elif novelty_verdict == overall:
         overall_reason = f"Novelty: {novelty_reason}"
-    else:
+    elif structure_verdict == overall:
         overall_reason = f"Structure: {structure_reason}"
+    else:
+        overall_reason = f"Domain: {domain_reason}"
 
     return RefereeReport(
         doi_label=doi_label,
@@ -141,9 +172,11 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         math_verdict=math_rep.verdict,
         novelty_verdict=novelty_verdict,
         structure_verdict=structure_verdict,
+        domain_verdict=domain_verdict,
         math_json=math_json,
         novelty_json=novelty_json,
         structure_json=structure_json,
+        domain_json=domain_json,
     )
 
 
@@ -319,6 +352,9 @@ def render_markdown(report: RefereeReport) -> str:
     lines.extend(_render_structure_section(
         report.structure_json, report.structure_verdict,
     ))
+    lines.extend(_render_domain_section(
+        report.domain_json, report.domain_verdict,
+    ))
 
     lines.append("---")
     lines.append("")
@@ -373,6 +409,63 @@ def _render_structure_section(struct_json: dict, verdict: Verdict) -> list[str]:
             lines.append(f"- **{k}** at {f.get('location', '')}. "
                          f"Trigger: \"{trigger}\"")
             lines.append(f"  {f.get('evidence', '')[:500]}")
+            if f.get("suggested_fix"):
+                lines.append(f"  _Suggested fix:_ {f['suggested_fix']}")
+        lines.append("")
+
+    emit("critical", "Critical")
+    emit("warning",  "Requires clarification")
+    emit("info",     "Informational")
+    return lines
+
+
+def _render_domain_section(dom_json: dict, verdict: Verdict) -> list[str]:
+    lines = []
+    if not dom_json:
+        lines.append("## Domain expert review")
+        lines.append("")
+        lines.append("_No domain-specific analysis was performed._")
+        lines.append("")
+        return lines
+
+    subdomain = dom_json.get("subdomain_used", "unknown")
+    persona = dom_json.get("persona", "?")
+    lines.append(f"## Domain expert review — verdict: `{verdict}`")
+    lines.append("")
+    lines.append(f"_Persona applied: {persona} (subdomain: `{subdomain}`)._")
+    lines.append("")
+    lines.append(
+        f"- Findings: {dom_json.get('n_findings', 0)} "
+        f"(crit {dom_json.get('n_critical', 0)}, "
+        f"warn {dom_json.get('n_warning', 0)}, "
+        f"info {dom_json.get('n_info', 0)})"
+    )
+    lines.append("")
+
+    findings = dom_json.get("findings", [])
+    if not findings:
+        return lines
+
+    by_sev = {"critical": [], "warning": [], "info": []}
+    for f in findings:
+        by_sev.setdefault(f.get("severity", "info"), []).append(f)
+
+    kind_label = {
+        "domain_concern": "Domain concern",
+        "assumption_check": "Assumption check",
+        "convention_check": "Convention check",
+        "info": "Note",
+    }
+
+    def emit(sev: str, header: str):
+        if not by_sev[sev]:
+            return
+        lines.append(f"**{header}:**")
+        lines.append("")
+        for f in by_sev[sev]:
+            k = kind_label.get(f.get("kind", "info"), "Note")
+            lines.append(f"- **{k}** at {f.get('location', '')}. "
+                         f"{f.get('evidence', '')[:500]}")
             if f.get("suggested_fix"):
                 lines.append(f"  _Suggested fix:_ {f['suggested_fix']}")
         lines.append("")

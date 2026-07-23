@@ -112,10 +112,11 @@ You will be given:
 
 Answer three questions:
 
-  (a) Which concerns did the real referees raise that touch mathematical rigor,
-      dimensional consistency, algebraic derivations, equations, limits, or
-      symbolic identities; novelty framing, missed citations, prior-art gaps,
-      reference staleness; or reproducibility?
+  (a) Which concerns did the real referees raise? Include any concern touching
+      mathematical rigor, dimensional consistency, derivations, equations,
+      limits, symbolic identities, novelty framing, missed citations,
+      prior-art gaps, reference staleness, notational hygiene, argument
+      clarity, assumption transparency, or reproducibility.
 
   (b) Which of our AI findings correspond to a real concern (match), which
       concerns did we miss (missed), and which of our findings are novel
@@ -123,15 +124,51 @@ Answer three questions:
 
   (c) Overall summary in 3-5 sentences.
 
-Guidelines:
-  - Be conservative in claiming a match. Two concerns match if they point
-    to the same equation, symbol, or reasoning gap.
-  - For 'novel_findings', label 'likely_false_positive' if the AI is
-    confused about a standard convention. Label 'possibly_valuable' if the
-    concern is precise but was overlooked by the humans. 'unclear' otherwise.
-  - The 'paraphrase-vs-equation mismatch' AI finding is a system self-check,
-    not a paper error — categorise novel findings involving it as
-    'likely_false_positive' unless the LaTeX mismatch is real."""
+MATCH CRITERIA (be inclusive, not restrictive):
+
+An AI finding matches a referee concern if ANY of these hold:
+  - They point to the same equation, symbol, or numbered result.
+  - They flag the same conceptual gap (e.g. both mention 'derivation
+    clarity in Section X', 'convention for symbol Y', 'missing assumption Z').
+  - They flag the same subdomain issue (e.g. both mention 'backreaction',
+    'PN order', 'boundary conditions', 'renormalization scheme').
+  - They flag the same missed citation, or the same overreach claim.
+
+Match quality:
+  - 'exact': same specific concern, same location, same argument.
+  - 'partial': same underlying issue but different framing / different
+    surface level. Use this generously.
+  - 'adjacent': related but not the same; the AI touches a topic near
+    the referee's concern without addressing it directly.
+
+Prefer 'partial' over 'novel' when in doubt. Real peer review is fuzzy;
+strict matching under-counts overlap.
+
+NOVEL FINDINGS — assessment rubric:
+
+An AI finding is 'novel' when no referee raised the concern. Then decide:
+
+- 'likely_false_positive': ONE OR MORE of these must hold:
+    * The AI finding is technically incorrect (misreads a symbol, confuses
+      a standard convention, invents a mismatch).
+    * The AI finding restates something the paper already addresses in a
+      section the AI did not consider.
+    * The AI finding is a 'paraphrase-vs-equation mismatch' flag that
+      reflects the AI's own summary error rather than a paper error.
+    * The AI finding is too vague to be actionable.
+
+- 'possibly_valuable': The AI finding is specific, technically sound,
+    and touches a concern a rigorous human referee could plausibly raise.
+    The fact that no referee flagged it may just mean the referees looked
+    elsewhere. DEFAULT to this label when the finding is domain-specific,
+    concrete, and non-obviously wrong.
+
+- 'unclear': Genuinely ambiguous — the AI finding is not obviously wrong
+    but also not obviously the right thing to flag.
+
+DEFAULT BIAS: When labelling novel findings, lean toward
+'possibly_valuable' unless you can point to a specific reason the AI
+finding is wrong. False positives require positive evidence to assert."""
 
 
 def _load_ai_report(doi: str) -> dict:
@@ -182,6 +219,23 @@ def _load_ai_report(doi: str) -> dict:
             }
             combined["findings"].append(f2)
         combined["structure_candidates_scanned"] = s.get("n_candidates_scanned", 0)
+
+    dom_path = get_path("processed_data") / "domain_reports" / f"{doi}.json"
+    if dom_path.exists():
+        d = json.loads(dom_path.read_text())
+        for f in d.get("findings", []):
+            f2 = {
+                "origin": "domain_expert",
+                "location": f.get("location", ""),
+                "source": "domain",
+                "severity": f.get("severity", ""),
+                "verdict": f.get("kind", ""),
+                "evidence": f.get("evidence", ""),
+                "suggested_fix": f.get("suggested_fix", ""),
+                "paraphrase_mismatch": False,
+            }
+            combined["findings"].append(f2)
+        combined["domain_subdomain"] = d.get("subdomain_used", "")
 
     return combined
 

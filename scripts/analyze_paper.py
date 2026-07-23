@@ -22,6 +22,7 @@ from peerlens.agents.dimensional_checker import check_paper as dim_check, save_r
 from peerlens.agents.sympy_verifier import verify_paper, save_report as save_sym
 from peerlens.agents.novelty_agent import analyze_novelty, save_report as save_nov
 from peerlens.agents.structure_agent import analyze_structure, save_report as save_str
+from peerlens.agents.domain_expert import analyze_domain, save_report as save_dom
 from peerlens.orchestrator.math_aggregator import aggregate_and_render
 from peerlens.orchestrator.referee_aggregator import aggregate_and_render_full
 from peerlens.ingestion.pdf import parse_pdf, save_parsed
@@ -57,7 +58,7 @@ def run_pipeline(doi: str, pdf_path: Path | None = None) -> None:
     parsed = ensure_parsed(doi, pdf_path)
     resolved_pdf = pdf_path or (get_path("raw_data") / "pdf" / f"{doi}.pdf")
 
-    console.print("[cyan]1/7[/cyan] Claim extraction")
+    console.print("[cyan]1/8[/cyan] Claim extraction")
     claims_path = get_path("processed_data") / "claims" / f"{doi}.json"
     if claims_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -68,7 +69,7 @@ def run_pipeline(doi: str, pdf_path: Path | None = None) -> None:
         console.print(f"       {res.n_claims_total} claims, {len(res.symbols)} symbols")
         claims_data = json.loads(claims_path.read_text())
 
-    console.print("[cyan]2/7[/cyan] Dimensional analysis")
+    console.print("[cyan]2/8[/cyan] Dimensional analysis")
     dim_path = get_path("processed_data") / "dimensional_reports" / f"{doi}.json"
     if dim_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -78,7 +79,7 @@ def run_pipeline(doi: str, pdf_path: Path | None = None) -> None:
         console.print(f"       {rep.n_findings} findings "
                       f"(crit={rep.n_critical}, warn={rep.n_warning})")
 
-    console.print("[cyan]3/7[/cyan] Symbolic verification (may fetch equation LaTeX)")
+    console.print("[cyan]3/8[/cyan] Symbolic verification (may fetch equation LaTeX)")
     sym_path = get_path("processed_data") / "sympy_reports" / f"{doi}.json"
     if sym_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -88,7 +89,7 @@ def run_pipeline(doi: str, pdf_path: Path | None = None) -> None:
         console.print(f"       verified={rep.n_verified}, refuted={rep.n_refuted}, "
                       f"unable={rep.n_unable}")
 
-    console.print("[cyan]4/7[/cyan] Novelty / literature review")
+    console.print("[cyan]4/8[/cyan] Novelty / literature review")
     nov_path = get_path("processed_data") / "novelty_reports" / f"{doi}.json"
     if nov_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -98,7 +99,7 @@ def run_pipeline(doi: str, pdf_path: Path | None = None) -> None:
         console.print(f"       {rep.n_related_retrieved} related retrieved, "
                       f"{rep.n_findings} findings")
 
-    console.print("[cyan]5/7[/cyan] Structure & narrative")
+    console.print("[cyan]5/8[/cyan] Structure & narrative")
     str_path = get_path("processed_data") / "structure_reports" / f"{doi}.json"
     if str_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -108,10 +109,20 @@ def run_pipeline(doi: str, pdf_path: Path | None = None) -> None:
         console.print(f"       {rep.n_candidates_scanned} candidates scanned, "
                       f"{rep.n_findings} findings")
 
-    console.print("[cyan]6/7[/cyan] Math aggregation")
+    console.print("[cyan]6/8[/cyan] Domain expert review")
+    dom_path = get_path("processed_data") / "domain_reports" / f"{doi}.json"
+    if dom_path.exists():
+        console.print("       [dim]cached[/dim]")
+    else:
+        rep = analyze_domain(doi, client=client)
+        save_dom(rep)
+        console.print(f"       persona={rep.persona}  findings={rep.n_findings} "
+                      f"(warn={rep.n_warning})")
+
+    console.print("[cyan]7/8[/cyan] Math aggregation")
     aggregate_and_render(doi)
 
-    console.print("[cyan]7/7[/cyan] Full referee section")
+    console.print("[cyan]8/8[/cyan] Full referee section")
     json_path, md_path = aggregate_and_render_full(doi)
 
     elapsed = time.time() - total_t0
