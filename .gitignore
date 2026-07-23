@@ -1,0 +1,27 @@
+__pycache__/
+.DS_Store
+.env
+.env.local
+.idea/
+.ipynb_checkpoints/
+.venv/
+.vscode/
+*.egg-info/
+*.log
+*.parquet
+*.pdf
+*.py[cod]
+*.swp
+# Data (too large for git)
+# Environment
+# IDE
+# Logs
+# Notebooks
+# Python
+data/
+data/corpus/
+data/processed/
+data/raw/
+logs/
+notebooks/*.ipynb
+venv/
