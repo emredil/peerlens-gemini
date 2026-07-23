@@ -13,6 +13,7 @@ from peerlens.agents.claim_extractor import extract_claims, save_claims
 from peerlens.agents.dimensional_checker import check_paper as dim_check, save_report as save_dim
 from peerlens.agents.sympy_verifier import verify_paper, save_report as save_sym
 from peerlens.agents.novelty_agent import analyze_novelty, save_report as save_nov
+from peerlens.agents.structure_agent import analyze_structure, save_report as save_str
 from peerlens.orchestrator.math_aggregator import aggregate_and_render
 from peerlens.orchestrator.referee_aggregator import aggregate_and_render_full
 from peerlens.evaluation.referee_comparison import compare, save_comparison
@@ -91,6 +92,17 @@ def stage_novelty(doi: str, client: GeminiClient) -> None:
     console.print(f"    novelty: retrieved={rep.n_related_retrieved} findings={rep.n_findings}")
 
 
+def stage_structure(doi: str, client: GeminiClient) -> None:
+    out = get_path("processed_data") / "structure_reports" / f"{doi}.json"
+    if out.exists():
+        console.print(f"    [dim]structure: cached[/dim]")
+        return
+    rep = analyze_structure(doi, client=client)
+    save_str(rep)
+    console.print(f"    structure: candidates={rep.n_candidates_scanned} findings={rep.n_findings} "
+                  f"(warn={rep.n_warning})")
+
+
 def stage_aggregate(doi: str) -> None:
     aggregate_and_render(doi)
     aggregate_and_render_full(doi)
@@ -117,6 +129,7 @@ def main(dois: list[str]) -> None:
             stage_dimensional(doi, claims_data, client)
             stage_sympy(doi, claims_data, client)
             stage_novelty(doi, client)
+            stage_structure(doi, client)
             stage_aggregate(doi)
         except Exception as e:
             console.print(f"    [red]FAILED[/red]: {type(e).__name__}: {str(e)[:250]}")

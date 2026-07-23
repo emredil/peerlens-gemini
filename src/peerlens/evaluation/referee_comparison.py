@@ -165,6 +165,24 @@ def _load_ai_report(doi: str) -> dict:
         combined["novelty_related_retrieved"] = n.get("n_related_retrieved", 0)
         combined["novelty_uncited_but_close"] = n.get("n_uncited_but_close", 0)
 
+    str_path = get_path("processed_data") / "structure_reports" / f"{doi}.json"
+    if str_path.exists():
+        s = json.loads(str_path.read_text())
+        for f in s.get("findings", []):
+            f2 = {
+                "origin": "structure_agent",
+                "location": f.get("location", ""),
+                "source": "structure",
+                "severity": f.get("severity", ""),
+                "verdict": f.get("kind", ""),
+                "evidence": f.get("evidence", ""),
+                "suggested_fix": f.get("suggested_fix", ""),
+                "trigger_phrase": f.get("trigger_phrase", ""),
+                "paraphrase_mismatch": False,
+            }
+            combined["findings"].append(f2)
+        combined["structure_candidates_scanned"] = s.get("n_candidates_scanned", 0)
+
     return combined
 
 
