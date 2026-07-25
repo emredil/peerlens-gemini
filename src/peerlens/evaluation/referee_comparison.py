@@ -237,6 +237,23 @@ def _load_ai_report(doi: str) -> dict:
             combined["findings"].append(f2)
         combined["domain_subdomain"] = d.get("subdomain_used", "")
 
+    repro_path = get_path("processed_data") / "reproducibility_reports" / f"{doi}.json"
+    if repro_path.exists():
+        r = json.loads(repro_path.read_text())
+        for f in r.get("findings", []):
+            f2 = {
+                "origin": "reproducibility_agent",
+                "location": f.get("location", ""),
+                "source": "reproducibility",
+                "severity": f.get("severity", ""),
+                "verdict": f.get("kind", ""),
+                "evidence": f.get("evidence", ""),
+                "suggested_fix": f.get("suggested_fix", ""),
+                "paraphrase_mismatch": False,
+            }
+            combined["findings"].append(f2)
+        combined["repro_scrutiny_level"] = r.get("scrutiny_level", "")
+
     return combined
 
 

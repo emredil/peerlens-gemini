@@ -36,10 +36,12 @@ class RefereeReport:
     novelty_verdict: Verdict = "insufficient_data"
     structure_verdict: Verdict = "insufficient_data"
     domain_verdict: Verdict = "insufficient_data"
+    reproducibility_verdict: Verdict = "insufficient_data"
     math_json: dict = field(default_factory=dict)
     novelty_json: dict = field(default_factory=dict)
     structure_json: dict = field(default_factory=dict)
     domain_json: dict = field(default_factory=dict)
+    reproducibility_json: dict = field(default_factory=dict)
 
 
 VERDICT_SEVERITY = {
@@ -57,6 +59,20 @@ VERDICT_HEADLINES = {
     "clean":    "The manuscript passes automated math and novelty checks.",
     "insufficient_data": "Insufficient signal was extracted for a full automated review; a human referee should assess this paper directly.",
 }
+
+
+def _reproducibility_verdict(repro: dict) -> tuple[Verdict, str]:
+    if not repro:
+        return "insufficient_data", "No reproducibility analysis available."
+    findings = repro.get("findings", [])
+    if not findings:
+        return "clean", "No reproducibility concerns identified."
+    counts = {"critical": 0, "warning": 0}
+    for f in findings:
+        counts[f.get("severity", "warning")] = counts.get(f.get("severity", "warning"), 0) + 1
+    if counts["critical"] > 0:
+        return "critical", f"{counts['critical']} critical reproducibility issue(s)."
+    return "major", f"{counts['warning']} reproducibility clarification(s) requested."
 
 
 def _domain_verdict(domain: dict) -> tuple[Verdict, str]:
@@ -154,7 +170,17 @@ def aggregate_full(doi_label: str) -> RefereeReport:
             domain_json = {}
     domain_verdict, domain_reason = _domain_verdict(domain_json)
 
-    overall = _combine_verdicts(math_rep.verdict, novelty_verdict, structure_verdict, domain_verdict)
+    repro_path = processed / "reproducibility_reports" / f"{doi_label}.json"
+    repro_json: dict = {}
+    if repro_path.exists():
+        try:
+            repro_json = _json_stdlib.loads(repro_path.read_text())
+        except _json_stdlib.JSONDecodeError:
+            repro_json = {}
+    repro_verdict, repro_reason = _reproducibility_verdict(repro_json)
+
+    overall = _combine_verdicts(math_rep.verdict, novelty_verdict,
+                                structure_verdict, domain_verdict, repro_verdict)
 
     if math_rep.verdict == overall:
         overall_reason = f"Math: {math_rep.verdict_reason}"
@@ -162,8 +188,10 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         overall_reason = f"Novelty: {novelty_reason}"
     elif structure_verdict == overall:
         overall_reason = f"Structure: {structure_reason}"
-    else:
+    elif domain_verdict == overall:
         overall_reason = f"Domain: {domain_reason}"
+    else:
+        overall_reason = f"Reproducibility: {repro_reason}"
 
     return RefereeReport(
         doi_label=doi_label,
@@ -173,10 +201,12 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         novelty_verdict=novelty_verdict,
         structure_verdict=structure_verdict,
         domain_verdict=domain_verdict,
+        reproducibility_verdict=repro_verdict,
         math_json=math_json,
         novelty_json=novelty_json,
         structure_json=structure_json,
         domain_json=domain_json,
+        reproducibility_json=repro_json,
     )
 
 
@@ -355,6 +385,9 @@ def render_markdown(report: RefereeReport) -> str:
     lines.extend(_render_domain_section(
         report.domain_json, report.domain_verdict,
     ))
+    lines.extend(_render_reproducibility_section(
+        report.reproducibility_json, report.reproducibility_verdict,
+    ))
 
     lines.append("---")
     lines.append("")
@@ -473,6 +506,60 @@ def _render_domain_section(dom_json: dict, verdict: Verdict) -> list[str]:
     emit("critical", "Critical")
     emit("warning",  "Requires clarification")
     emit("info",     "Informational")
+    return lines
+
+
+def _render_reproducibility_section(repro_json: dict, verdict: Verdict) -> list[str]:
+    lines = []
+    if not repro_json:
+        lines.append("## Reproducibility")
+        lines.append("")
+        lines.append("_No reproducibility analysis was performed._")
+        lines.append("")
+        return lines
+
+    scrutiny = repro_json.get("scrutiny_level", "unknown")
+    lines.append(f"## Reproducibility — verdict: `{verdict}`")
+    lines.append("")
+    lines.append(f"_Scrutiny level: `{scrutiny}`._")
+    lines.append("")
+    lines.append(
+        f"- Findings: {repro_json.get('n_findings', 0)} "
+        f"(crit {repro_json.get('n_critical', 0)}, "
+        f"warn {repro_json.get('n_warning', 0)})"
+    )
+    lines.append("")
+
+    findings = repro_json.get("findings", [])
+    if not findings:
+        return lines
+
+    kind_label = {
+        "missing_code": "Missing code / repository",
+        "missing_data": "Missing data availability",
+        "missing_params": "Missing parameter specification",
+        "missing_algorithm": "Missing algorithm specification",
+    }
+
+    by_sev = {"critical": [], "warning": []}
+    for f in findings:
+        by_sev.setdefault(f.get("severity", "warning"), []).append(f)
+
+    def emit(sev: str, header: str):
+        if not by_sev[sev]:
+            return
+        lines.append(f"**{header}:**")
+        lines.append("")
+        for f in by_sev[sev]:
+            k = kind_label.get(f.get("kind", ""), "Reproducibility gap")
+            lines.append(f"- **{k}** at {f.get('location', '')}. "
+                         f"{f.get('evidence', '')[:500]}")
+            if f.get("suggested_fix"):
+                lines.append(f"  _Suggested fix:_ {f['suggested_fix']}")
+        lines.append("")
+
+    emit("critical", "Critical")
+    emit("warning",  "Requires clarification")
     return lines
 
 
