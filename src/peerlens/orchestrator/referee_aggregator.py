@@ -21,6 +21,7 @@ from typing import Literal, Optional
 
 from peerlens.settings import get_path
 from peerlens.orchestrator.math_aggregator import aggregate as aggregate_math
+from peerlens.orchestrator.scoring import score_paper, save_triage_score
 
 import json as _json_stdlib
 
@@ -32,6 +33,9 @@ class RefereeReport:
     doi_label: str
     overall_verdict: Verdict = "insufficient_data"
     overall_reason: str = ""
+    triage_score: int = 100
+    triage_verdict: str = "insufficient_data"
+    triage_top_negative: list = field(default_factory=list)
     math_verdict: Verdict = "insufficient_data"
     novelty_verdict: Verdict = "insufficient_data"
     structure_verdict: Verdict = "insufficient_data"
@@ -193,6 +197,19 @@ def aggregate_full(doi_label: str) -> RefereeReport:
     else:
         overall_reason = f"Reproducibility: {repro_reason}"
 
+    triage = score_paper(doi_label)
+    save_triage_score(triage)
+    top_neg_serialized = [
+        {
+            "source": c.source,
+            "kind": c.kind,
+            "severity": c.severity,
+            "location": c.location,
+            "weight": c.weight,
+            "evidence_short": c.evidence_short,
+        } for c in triage.top_negative
+    ]
+
     return RefereeReport(
         doi_label=doi_label,
         overall_verdict=overall,
@@ -202,6 +219,9 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         structure_verdict=structure_verdict,
         domain_verdict=domain_verdict,
         reproducibility_verdict=repro_verdict,
+        triage_score=triage.score,
+        triage_verdict=triage.verdict,
+        triage_top_negative=top_neg_serialized,
         math_json=math_json,
         novelty_json=novelty_json,
         structure_json=structure_json,
@@ -363,15 +383,47 @@ def _render_novelty_section(nov_json: dict, verdict: Verdict, reason: str) -> li
 
 def render_markdown(report: RefereeReport) -> str:
     lines: list[str] = []
-    lines.append(f"# AI Referee Section — {report.doi_label}")
+    lines.append(f"# PeerLens Editorial Triage — {report.doi_label}")
     lines.append("")
-    lines.append(f"**Overall verdict:** `{report.overall_verdict}` — "
-                 f"{VERDICT_HEADLINES[report.overall_verdict]}")
+
+    verdict_labels = {
+        "priority": "PRIORITY — surface to editor immediately",
+        "standard": "STANDARD — route to normal referee process",
+        "reject":   "REJECT candidate — auto-reject subject to editor confirmation",
+        "insufficient_data": "INSUFFICIENT DATA — human review required",
+    }
+    tv = report.triage_verdict
+    lines.append(f"## Triage: **{tv.upper()}** (score {report.triage_score}/100)")
+    lines.append("")
+    lines.append(f"_{verdict_labels.get(tv, tv)}_")
+    lines.append("")
+
+    if report.triage_top_negative:
+        lines.append("**Why this score — top signals against the paper:**")
+        lines.append("")
+        for c in report.triage_top_negative:
+            src = c["source"]
+            kind = c["kind"]
+            sev = c["severity"]
+            loc = c["location"] or "—"
+            weight = c["weight"]
+            evidence = c["evidence_short"]
+            lines.append(f"- `{weight:+d}` **{src}.{kind}** [{sev}] @ {loc}")
+            lines.append(f"  _{evidence}_")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+
+    lines.append(f"### Legacy verdict: `{report.overall_verdict}`")
     lines.append("")
     lines.append(f"_{report.overall_reason}_")
     lines.append("")
-    lines.append(f"- Math verdict:    `{report.math_verdict}`")
-    lines.append(f"- Novelty verdict: `{report.novelty_verdict}`")
+    lines.append(f"- Math:            `{report.math_verdict}`")
+    lines.append(f"- Novelty:         `{report.novelty_verdict}`")
+    lines.append(f"- Structure:       `{report.structure_verdict}`")
+    lines.append(f"- Domain:          `{report.domain_verdict}`")
+    lines.append(f"- Reproducibility: `{report.reproducibility_verdict}`")
     lines.append("")
 
     lines.extend(_render_math_section(report.math_json))
