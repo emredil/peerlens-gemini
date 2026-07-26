@@ -45,6 +45,47 @@ def load_classification(doi: str) -> dict:
         return {}
 
 
+def load_policy(doi: str) -> dict:
+    """Return llm_detection_reports/{doi}.json if the editor opted in for
+    this paper, otherwise {}."""
+    path = get_path("processed_data") / "llm_detection_reports" / f"{doi}.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _policy_badge(policy: dict) -> str:
+    """Render an inline pill showing the LLM-authorship verdict + confidence.
+
+    Returns an empty string when policy is missing (no opt-in for this paper),
+    so the row layout stays identical for papers without a policy check.
+    """
+    if not policy:
+        return ""
+    verdict = policy.get("verdict", "unclear")
+    try:
+        conf = float(policy.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    palette = {
+        "likely_human": ("#e6f4ea", "#0a7c00", "✓ HUMAN"),
+        "unclear":      ("#f0f0f0", "#555555", "? UNCLEAR"),
+        "possibly_llm": ("#fff3d9", "#8a5a00", "⚠ POSSIBLE AI"),
+        "likely_llm":   ("#fde2e2", "#a00000", "⚠ LIKELY AI"),
+    }
+    bg, fg, label = palette.get(verdict, ("#f0f0f0", "#555555", str(verdict).upper()))
+    return (
+        f"<div style='display:inline-block; margin-top:6px; padding:2px 8px; "
+        f"background:{bg}; color:{fg}; border-radius:10px; font-size:0.75em; "
+        f"font-weight:600; letter-spacing:0.02em;'>"
+        f"{label} <span style='font-weight:400; opacity:0.75;'>"
+        f"({conf:.2f})</span></div>"
+    )
+
+
 BUCKETS = [
     ("priority", "Priority (score ≥ 80)", "#0a7c00"),
     ("standard", "Standard (40–79)", "#a06000"),
@@ -91,6 +132,8 @@ def render_row(t: dict) -> str:
     doi = t.get("doi_label", "?")
     score = t.get("score", 0)
     title = load_parsed_title(doi)
+    policy = load_policy(doi)
+    policy_badge_html = _policy_badge(policy)
     cls = load_classification(doi)
     subs = ", ".join(cls.get("subdomains", []) or [])
 
@@ -117,7 +160,8 @@ def render_row(t: dict) -> str:
     return (
         "<tr>"
         f"<td class='score'>{score}</td>"
-        f"<td class='doi'>{escape(doi)}<br><span class='subdomain'>{escape(subs)}</span></td>"
+        f"<td class='doi'>{escape(doi)}<br><span class='subdomain'>{escape(subs)}</span>"
+        f"{('<br>' + policy_badge_html) if policy_badge_html else ''}</td>"
         f"<td>{escape(title)}<br>{top_neg_html}</td>"
         f"<td><a class='md-link' href='{md_rel}'>report.md</a></td>"
         "</tr>"

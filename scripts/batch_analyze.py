@@ -25,6 +25,7 @@ from peerlens.agents.novelty_agent import analyze_novelty, save_report as save_n
 from peerlens.agents.structure_agent import analyze_structure, save_report as save_str
 from peerlens.agents.domain_expert import analyze_domain, save_report as save_dom
 from peerlens.agents.reproducibility_agent import analyze_reproducibility, save_report as save_repro
+from peerlens.agents.llm_detector import analyze_llm_authorship, save_report as save_llm
 from peerlens.orchestrator.math_aggregator import aggregate_and_render
 from peerlens.orchestrator.referee_aggregator import aggregate_and_render_full
 from peerlens.ingestion.pdf import parse_pdf, save_parsed
@@ -56,7 +57,7 @@ def ensure_parsed(doi: str, pdf_path: Path) -> dict:
     return json.loads(parsed_path.read_text())
 
 
-def run_one(doi: str, pdf_path: Path, client: GeminiClient) -> dict:
+def run_one(doi: str, pdf_path: Path, client: GeminiClient, *, check_llm: bool = False) -> dict:
     """Return a summary dict with score / verdict / status."""
     t0 = time.time()
     stages_done = []
@@ -113,6 +114,21 @@ def run_one(doi: str, pdf_path: Path, client: GeminiClient) -> dict:
         aggregate_and_render_full(doi)
         stages_done.append("referee_aggregate")
 
+        llm_verdict = None
+        llm_confidence = None
+        if check_llm:
+            llm_path = get_path("processed_data") / "llm_detection_reports" / f"{doi}.json"
+            if not llm_path.exists():
+                rep = analyze_llm_authorship(doi, client=client)
+                save_llm(rep)
+            if llm_path.exists():
+                ld = json.loads(llm_path.read_text())
+                llm_verdict = ld.get("verdict")
+                llm_confidence = ld.get("confidence")
+                # Re-render markdown to embed the Policy section.
+                aggregate_and_render_full(doi)
+            stages_done.append("llm_detection")
+
         triage_path = get_path("processed_data") / "triage_scores" / f"{doi}.json"
         triage = json.loads(triage_path.read_text())
         return {
@@ -120,6 +136,8 @@ def run_one(doi: str, pdf_path: Path, client: GeminiClient) -> dict:
             "status": "ok",
             "score": triage.get("score", 0),
             "verdict": triage.get("verdict", "unknown"),
+            "llm_verdict": llm_verdict,
+            "llm_confidence": llm_confidence,
             "elapsed_s": round(time.time() - t0, 1),
             "stages_done": stages_done,
         }
@@ -152,6 +170,8 @@ def main():
     ap.add_argument("--doi", action="append", help="Explicit DOI (repeatable)")
     ap.add_argument("--doi-list", type=Path, help="File with one DOI per line")
     ap.add_argument("--pdf-dir", type=Path, help="Process every PDF in this directory")
+    ap.add_argument("--check-llm", action="store_true",
+                    help="Also run LLM-authorship detection on each paper (opt-in).")
     ap.add_argument("--summary-out", type=Path,
                     default=Path("data/processed/batch_summary.json"),
                     help="Where to write the per-paper summary")
@@ -183,7 +203,7 @@ def main():
             console.print(f"  [red]PDF missing at {pdf_path}, skipping[/red]")
             summaries.append({"doi": doi, "status": "no_pdf", "score": None, "verdict": None})
             continue
-        summary = run_one(doi, pdf_path, client)
+        summary = run_one(doi, pdf_path, client, check_llm=args.check_llm)
         summaries.append(summary)
         if summary["status"] == "ok":
             v = summary["verdict"]

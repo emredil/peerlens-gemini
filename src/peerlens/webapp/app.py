@@ -59,6 +59,9 @@ class Job:
     status: str = "queued"     # queued | running | done | failed
     score: int | None = None
     verdict: str | None = None
+    check_llm: bool = False
+    llm_verdict: str | None = None
+    llm_confidence: float | None = None
     error: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
@@ -85,8 +88,11 @@ def _run_pipeline(job: Job) -> None:
     if job.source == "arxiv":
         cmd = [sys.executable, str(analyze_script), "--arxiv", job.input_ref]
     else:
-        cmd = [sys.executable, str(analyze_script), "--pdf", job.input_ref,
-               "--doi", job.doi_label]
+        # PDF was saved to data/raw/pdf/{doi_label}.pdf during upload,
+        # so --doi is enough for analyze_paper to find it.
+        cmd = [sys.executable, str(analyze_script), "--doi", job.doi_label]
+    if job.check_llm:
+        cmd.append("--check-llm")
 
     try:
         proc = subprocess.run(
@@ -120,10 +126,23 @@ def _run_pipeline(job: Job) -> None:
     if triage_path.exists():
         try:
             t = json.loads(triage_path.read_text())
+            llm_verdict = None
+            llm_confidence = None
+            if job.check_llm:
+                llm_path = get_path("processed_data") / "llm_detection_reports" / f"{job.doi_label}.json"
+                if llm_path.exists():
+                    try:
+                        ld = json.loads(llm_path.read_text())
+                        llm_verdict = ld.get("verdict")
+                        llm_confidence = ld.get("confidence")
+                    except Exception:
+                        pass
             with _JOBS_LOCK:
                 job.status = "done"
                 job.score = t.get("score")
                 job.verdict = t.get("verdict")
+                job.llm_verdict = llm_verdict
+                job.llm_confidence = llm_confidence
                 job.finished_at = time.time()
             return
         except Exception:
@@ -200,6 +219,12 @@ INDEX_TEMPLATE = r"""
         <input type="text" name="arxiv" placeholder="e.g. 2401.12345 or https://arxiv.org/abs/2401.12345">
         <div class="hint">The PDF will be fetched automatically.</div>
       </div>
+    </div>
+    <div style="margin: 4px 0 14px 0; padding: 10px 12px; background: #f8f8f8; border-radius: 4px; border-left: 3px solid #a06000;">
+      <label style="display: flex; align-items: center; gap: 8px; font-weight: 500; color: #333; margin: 0; cursor: pointer;">
+        <input type="checkbox" name="check_llm" value="on" style="width: auto; margin: 0;">
+        <span>Check for AI-generated content <span style="font-weight: 400; color: #888; font-size: 0.85em;">(per-paper policy override; applies to both PDF and arXiv inputs above)</span></span>
+      </label>
     </div>
     <button type="submit">Submit for triage</button>
   </form>
@@ -312,13 +337,15 @@ def upload():
 
     dispatched: list[dict] = []
 
+    check_llm = request.form.get("check_llm") in ("on", "true", "1", "yes")
+
     # Handle arXiv input
     if arxiv_field:
         try:
             aid = normalize_arxiv_id(arxiv_field)
             doi_label = arxiv_id_to_doi_label(aid)
             job = Job(job_id=_new_job_id(), doi_label=doi_label,
-                      source="arxiv", input_ref=aid)
+                      source="arxiv", input_ref=aid, check_llm=check_llm)
             with _JOBS_LOCK:
                 JOBS[job.job_id] = job
             _dispatch(job)
@@ -341,7 +368,7 @@ def upload():
         dst = incoming_dir / f"{doi_label}.pdf"
         f.save(str(dst))
         job = Job(job_id=_new_job_id(), doi_label=doi_label,
-                  source="pdf", input_ref=f.filename)
+                  source="pdf", input_ref=f.filename, check_llm=check_llm)
         with _JOBS_LOCK:
             JOBS[job.job_id] = job
         _dispatch(job)

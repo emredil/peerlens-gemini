@@ -33,6 +33,7 @@ from peerlens.agents.novelty_agent import analyze_novelty, save_report as save_n
 from peerlens.agents.structure_agent import analyze_structure, save_report as save_str
 from peerlens.agents.domain_expert import analyze_domain, save_report as save_dom
 from peerlens.agents.reproducibility_agent import analyze_reproducibility, save_report as save_repro
+from peerlens.agents.llm_detector import analyze_llm_authorship, save_report as save_llm
 from peerlens.orchestrator.math_aggregator import aggregate_and_render
 from peerlens.orchestrator.referee_aggregator import aggregate_and_render_full
 from peerlens.ingestion.pdf import parse_pdf, save_parsed
@@ -133,7 +134,7 @@ def _refresh_dashboard() -> None:
         console.print(f"  [yellow]dashboard refresh error: {e}[/yellow]")
 
 
-def run_pipeline(doi: str, pdf_path: Path) -> None:
+def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
     client = GeminiClient()
     total_t0 = time.time()
 
@@ -218,8 +219,33 @@ def run_pipeline(doi: str, pdf_path: Path) -> None:
     score = triage.get("score", 0)
     color = {"priority": "green", "standard": "yellow", "reject": "red"}.get(verdict, "white")
 
+    # Optional LLM-authorship policy check (opt-in; does not affect score).
+    llm_verdict = None
+    llm_confidence = None
+    if check_llm:
+        console.print("[cyan]Policy[/cyan]  LLM-authorship detection")
+        llm_path = get_path("processed_data") / "llm_detection_reports" / f"{doi}.json"
+        if llm_path.exists():
+            console.print("        [dim]cached[/dim]")
+        else:
+            rep = analyze_llm_authorship(doi)
+            save_llm(rep)
+            console.print(f"        verdict={rep.verdict}  confidence={rep.confidence:.2f}  "
+                          f"signals={rep.n_signals} (strong={rep.n_strong}, mod={rep.n_moderate})")
+        if llm_path.exists():
+            llm_data = json.loads(llm_path.read_text())
+            llm_verdict = llm_data.get("verdict")
+            llm_confidence = llm_data.get("confidence")
+            # Re-render markdown so the Policy section is embedded in the report.
+            aggregate_and_render_full(doi)
+
     console.rule("[bold green]Done[/bold green]")
     console.print(f"Triage:   [{color}]{verdict.upper()}[/{color}]  (score {score}/100)")
+    if llm_verdict:
+        llm_color = {"likely_human": "green", "unclear": "white",
+                     "possibly_llm": "yellow", "likely_llm": "red"}.get(llm_verdict, "white")
+        cconf = f"{llm_confidence:.2f}" if llm_confidence is not None else "?"
+        console.print(f"Policy:   [{llm_color}]{llm_verdict.upper()}[/{llm_color}]  (confidence {cconf})")
     console.print(f"Elapsed:  {time.time()-total_t0:.1f}s")
     console.print(f"Report:   {md_path}")
 
@@ -235,10 +261,13 @@ def main():
                     help="arXiv id or URL (e.g. 2401.12345)")
     ap.add_argument("--doi", type=str,
                     help="Explicit identifier (defaults to filename stem when using --pdf)")
+    ap.add_argument("--check-llm", action="store_true",
+                    help="Also run LLM-authorship detection (opt-in policy check; "
+                         "does not affect the triage score).")
     args = ap.parse_args()
 
     doi, pdf_path = resolve_input(args)
-    run_pipeline(doi, pdf_path)
+    run_pipeline(doi, pdf_path, check_llm=args.check_llm)
 
 
 if __name__ == "__main__":

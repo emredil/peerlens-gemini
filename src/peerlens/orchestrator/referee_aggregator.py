@@ -46,6 +46,7 @@ class RefereeReport:
     structure_json: dict = field(default_factory=dict)
     domain_json: dict = field(default_factory=dict)
     reproducibility_json: dict = field(default_factory=dict)
+    policy_json: dict = field(default_factory=dict)
 
 
 VERDICT_SEVERITY = {
@@ -183,6 +184,16 @@ def aggregate_full(doi_label: str) -> RefereeReport:
             repro_json = {}
     repro_verdict, repro_reason = _reproducibility_verdict(repro_json)
 
+    # Optional policy check (LLM-authorship). Independent of triage score;
+    # renders only when the editor opted in for this paper.
+    policy_path = processed / "llm_detection_reports" / f"{doi_label}.json"
+    policy_json: dict = {}
+    if policy_path.exists():
+        try:
+            policy_json = _json_stdlib.loads(policy_path.read_text())
+        except _json_stdlib.JSONDecodeError:
+            policy_json = {}
+
     overall = _combine_verdicts(math_rep.verdict, novelty_verdict,
                                 structure_verdict, domain_verdict, repro_verdict)
 
@@ -227,6 +238,7 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         structure_json=structure_json,
         domain_json=domain_json,
         reproducibility_json=repro_json,
+        policy_json=policy_json,
     )
 
 
@@ -426,6 +438,10 @@ def render_markdown(report: RefereeReport) -> str:
     lines.append(f"- Reproducibility: `{report.reproducibility_verdict}`")
     lines.append("")
 
+    # Policy section renders only when llm_detection_reports/ JSON exists
+    # on disk (editor opted in). Does not influence the triage score.
+    if report.policy_json:
+        lines.extend(_render_policy_section(report.policy_json))
     lines.extend(_render_math_section(report.math_json))
     lines.extend(_render_novelty_section(
         report.novelty_json, report.novelty_verdict,
@@ -612,6 +628,62 @@ def _render_reproducibility_section(repro_json: dict, verdict: Verdict) -> list[
 
     emit("critical", "Critical")
     emit("warning",  "Requires clarification")
+    return lines
+
+
+def _render_policy_section(policy_json: dict) -> list[str]:
+    """Render the opt-in LLM-authorship policy check.
+
+    This section is a policy signal, not a quality signal, and does not
+    influence the triage score. It appears only when the editor explicitly
+    requested it for this paper (via --check-llm or the web UI checkbox).
+    """
+    lines: list[str] = []
+    if not policy_json:
+        return lines
+
+    verdict = policy_json.get("verdict", "unclear")
+    confidence = policy_json.get("confidence", 0.0)
+    reasoning = policy_json.get("reasoning", "")
+    signals = policy_json.get("signals", []) or []
+    model = policy_json.get("model", "")
+
+    label = str(verdict).upper().replace("_", " ")
+    try:
+        conf_txt = f"{float(confidence):.2f}"
+    except (TypeError, ValueError):
+        conf_txt = "?"
+
+    lines.append(f"## Policy check — {label} (confidence {conf_txt})")
+    lines.append("")
+    lines.append("_Opt-in AI-authorship detection. Does not affect the triage score._")
+    if model:
+        lines.append(f"_Model: `{model}`._")
+    lines.append("")
+
+    if reasoning:
+        lines.append(f"**Reasoning.** {reasoning}")
+        lines.append("")
+
+    if signals:
+        n_strong = sum(1 for s in signals if s.get("severity") == "strong")
+        n_moderate = sum(1 for s in signals if s.get("severity") == "moderate")
+        n_weak = sum(1 for s in signals if s.get("severity") == "weak")
+        lines.append(
+            f"**Signals:** {len(signals)} total "
+            f"(strong={n_strong}, moderate={n_moderate}, weak={n_weak})"
+        )
+        lines.append("")
+        for s in signals:
+            sev = s.get("severity", "?")
+            cat = s.get("category", "?")
+            loc = s.get("location", "") or "—"
+            desc = s.get("description", "")
+            lines.append(f"- **[{sev}]** _{cat}_ @ {loc}: {desc}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
     return lines
 
 
