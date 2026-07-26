@@ -1,16 +1,24 @@
-"""Structure & Narrative Agent (Gemini port).
+"""Structure & Narrative Agent — silence-default.
 
-Detects derivation gaps, hand-wavy proof shortcuts, and undefined-argument
-patterns that human referees typically flag as 'please clarify' or 'please
-provide the missing derivation'.
+Detects derivation gaps, hand-wavy proof shortcuts, and orphan references
+that human referees typically flag as 'please clarify' or 'please provide
+the missing derivation'.
 
 Two stages:
   1. Local pattern scan — locate candidate 'trigger' phrases in section
-     bodies (e.g. "trivially follows", "it is easy to see", "we omit",
-     "as shown in", "straightforward calculation shows", ...).
-  2. LLM adjudication — for each candidate, ask Gemini pro-latest to judge
-     whether the phrase indicates a real derivation gap in context, or is
-     an acceptable rhetorical shortcut. This filters out benign uses.
+     bodies (regex; deterministic).
+  2. LLM adjudication — for each candidate, decide whether the phrase
+     indicates a real problem in context, or is an acceptable rhetorical
+     shortcut. Filter is conservative: silence is the default.
+
+Design (post-variance-diagnostic):
+  - No soft quota — the previous "at most 5-10 findings" ceiling drove
+    inconsistent filtering ([1,7,7] and [2,0,0] patterns on 6x3 probe).
+  - Kind enum narrowed to 2 (derivation_gap, orphan_reference).
+    handwavy_shortcut absorbed into derivation_gap; info kind removed.
+  - Severity enum narrowed to critical/warning (info removed).
+  - Post-hoc confidence filter (< 0.5 dropped).
+  - Post-hoc dedup on candidate_id.
 """
 from __future__ import annotations
 
@@ -26,8 +34,8 @@ from peerlens.gemini_client import GeminiClient
 
 @dataclass
 class StructureFinding:
-    kind: str          # "derivation_gap" | "handwavy_shortcut" | "orphan_reference" | "info"
-    severity: str      # "critical" | "warning" | "info"
+    kind: str          # "derivation_gap" | "orphan_reference"
+    severity: str      # "critical" | "warning"
     location: str      # section id or number
     trigger_phrase: str
     context_excerpt: str
@@ -43,7 +51,6 @@ class StructureReport:
     n_findings: int = 0
     n_critical: int = 0
     n_warning: int = 0
-    n_info: int = 0
     findings: list[StructureFinding] = field(default_factory=list)
     model: str = ""
     input_tokens: int = 0
@@ -128,11 +135,11 @@ STRUCTURE_SCHEMA = {
                     "candidate_id": {"type": "integer"},
                     "kind": {
                         "type": "string",
-                        "enum": ["derivation_gap", "handwavy_shortcut", "orphan_reference", "info"],
+                        "enum": ["derivation_gap", "orphan_reference"],
                     },
                     "severity": {
                         "type": "string",
-                        "enum": ["critical", "warning", "info"],
+                        "enum": ["critical", "warning"],
                     },
                     "evidence": {"type": "string"},
                     "suggested_fix": {"type": "string"},
@@ -149,42 +156,53 @@ STRUCTURE_SCHEMA = {
 STRUCTURE_SYSTEM = """You are a physics referee evaluating narrative and derivation
 quality in a manuscript. You will be given a list of candidate 'trigger
 phrases' extracted from the paper — phrases like 'it is easy to see',
-'trivially follows', 'we omit the proof', 'as shown in the appendix', etc.
+'trivially follows', 'we omit the proof', 'as shown in the appendix'.
 
 Your job: for each candidate, decide whether the phrase indicates a real
-derivation gap that a rigorous referee would flag, or whether it is an
-acceptable rhetorical shortcut given the paper's level and context.
+problem that a rigorous referee would flag, or whether it is an
+acceptable rhetorical shortcut.
 
-FINDING KINDS:
+FINDING KINDS (only two — pick the closer fit):
 
-- derivation_gap: A non-trivial step is claimed without argument. The
-  referee would need to see the missing calculation or citation to
-  accept the result. Severity typically 'warning'; use 'critical' only
-  if a central claim rests on the omitted step.
+- derivation_gap: A non-trivial step is claimed without justification.
+  The referee would need to see the missing calculation or citation to
+  accept the result. This ALSO covers hand-wavy shortcuts ('obvious',
+  'clearly', 'trivial', 'easy') in contexts a competent reader in the
+  target audience would NOT find obvious. Do not use a separate
+  'handwavy' kind — hand-waving IS a derivation gap.
 
-- handwavy_shortcut: The paper uses 'obvious', 'clearly', 'easy',
-  'trivial' etc. in a context that is genuinely NOT obvious to a
-  competent reader in the field. Severity 'warning' or 'info'.
+- orphan_reference: The paper says 'as shown in the appendix' or
+  'see Section X' but the surrounding excerpt gives no concrete
+  appendix or section number, or the referenced location is absent
+  from the paper.
 
-- orphan_reference: The paper says 'as shown in the appendix' or 'see
-  Section X' but the surrounding excerpt does not name a concrete
-  appendix/section, or the referenced location seems inappropriate.
-  Severity 'info' unless the reference is central.
+SEVERITY (only two):
+- critical: A central claim of the paper rests on the omitted step.
+- warning: The referee would ask the author to clarify before publication.
 
-- info: The phrase appears but its use is acceptable — the paper does
-  provide enough surrounding context, or the step really is trivial for
-  a physicist in the target audience. Include a brief note explaining
-  why this is fine.
+STRICT RULES:
 
-STRICTNESS:
+1. Silence is the default. Physics writing routinely uses these phrases
+   legitimately. If the surrounding context makes the step plausible for
+   a physicist in the target audience, DO NOT flag it. An EMPTY findings
+   list is the CORRECT answer in most cases.
 
-Be conservative. Physics writing routinely uses these phrases in fully
-legitimate ways. Only flag as 'derivation_gap' or 'handwavy_shortcut' if
-you can point to a specific concrete step that a competent referee would
-demand. If in doubt, use severity 'info' with kind 'info'.
+2. Only flag a candidate when you can point to a SPECIFIC missing step:
+   "the claim that <X> requires <Y> but the paper only shows <Z>".
+   Vague concerns ("this could be more rigorous", "more detail would
+   help") are NOT findings.
 
-Aim for at most 5-10 findings across the whole manuscript. Return an
-empty list if the candidates you receive are all acceptable uses."""
+3. Evidence must name the specific missing step. Do NOT merely repeat
+   the trigger phrase or the surrounding context.
+
+4. Confidence must be >= 0.5. Anything below is speculation and should
+   be omitted entirely.
+
+5. Do NOT emit multiple findings for the same candidate_id. If a
+   candidate is worth flagging, emit one finding for it.
+
+Target: 0-4 findings per paper. Empty is common and correct. Never
+exceed 6."""
 
 
 def _format_candidates(cands: list[Candidate]) -> str:
@@ -257,14 +275,30 @@ candidates that are genuinely worth flagging; be conservative."""
         tool_name="record_structure_findings",
         tool_description="Record structural / narrative referee findings for the paper.",
         tool_input_schema=STRUCTURE_SCHEMA,
-        max_output_tokens=3500,
+        max_output_tokens=1500,
         fallback_models=CONFIG["gemini"].get("fallback_chain", []),
     )
 
+    seen_cids: set[int] = set()
     for f in result.tool_input.get("findings", []):
         cid = f.get("candidate_id", -1)
         if not (0 <= cid < len(cands)):
             continue
+        # Defensive: schema restricts kind + severity but strip drift.
+        if f.get("severity") not in ("critical", "warning"):
+            continue
+        if f.get("kind") not in ("derivation_gap", "orphan_reference"):
+            continue
+        try:
+            conf = float(f.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.5:
+            continue
+        # Dedup: one finding per candidate_id.
+        if cid in seen_cids:
+            continue
+        seen_cids.add(cid)
         c = cands[cid]
         report.findings.append(StructureFinding(
             kind=f["kind"],
@@ -274,13 +308,12 @@ candidates that are genuinely worth flagging; be conservative."""
             context_excerpt=c.context[:600],
             evidence=f["evidence"],
             suggested_fix=f.get("suggested_fix", ""),
-            confidence=f.get("confidence", 0.0),
+            confidence=conf,
         ))
 
     report.n_findings = len(report.findings)
     report.n_critical = sum(1 for f in report.findings if f.severity == "critical")
     report.n_warning = sum(1 for f in report.findings if f.severity == "warning")
-    report.n_info = sum(1 for f in report.findings if f.severity == "info")
     report.model = result.model
     report.input_tokens = result.input_tokens
     report.output_tokens = result.output_tokens

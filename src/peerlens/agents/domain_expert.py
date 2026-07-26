@@ -1,13 +1,18 @@
-"""Domain Expert Agent (Gemini port).
+"""Domain Expert Agent — silence-default.
 
 Given a paper's subdomain classification, this agent applies a
 subdomain-specific referee persona and checklist to surface concerns a
 generic reviewer would miss.
 
-The domain persona is selected from a prompt bank indexed by the codes
-produced by peerlens.classification.taxonomy. If a paper has multiple
-subdomains the agent focuses on the primary one; a small set of universal
-checks always applies as well.
+Design (post-variance-diagnostic):
+  - Silence is the default. Empty findings list is preferable to filler.
+  - No soft quota — the previous "Prefer 3-6 focused findings" line
+    drove fabrication and 0% strict cross-run stability on a 6x3 probe.
+  - Kind enum narrowed to 2 categories (from 4).
+  - Severity enum narrowed to critical/warning (info removed).
+  - Location + evidence must be explicit direct quotes.
+  - Post-hoc dedup on (location, kind).
+  - Post-hoc confidence filter (< 0.5 dropped).
 """
 from __future__ import annotations
 
@@ -22,8 +27,8 @@ from peerlens.gemini_client import GeminiClient
 
 @dataclass
 class DomainFinding:
-    kind: str          # "domain_concern" | "assumption_check" | "convention_check" | "info"
-    severity: str      # "critical" | "warning" | "info"
+    kind: str          # "domain_concern"
+    severity: str      # "critical" | "warning"
     location: str
     evidence: str
     suggested_fix: str = ""
@@ -38,7 +43,6 @@ class DomainReport:
     n_findings: int = 0
     n_critical: int = 0
     n_warning: int = 0
-    n_info: int = 0
     findings: list[DomainFinding] = field(default_factory=list)
     model: str = ""
     input_tokens: int = 0
@@ -155,18 +159,18 @@ DOMAIN_SCHEMA = {
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["domain_concern", "assumption_check", "convention_check", "info"],
+                        "enum": ["domain_concern"],
                     },
                     "severity": {
                         "type": "string",
-                        "enum": ["critical", "warning", "info"],
+                        "enum": ["critical", "warning"],
                     },
                     "location": {"type": "string"},
                     "evidence": {"type": "string"},
                     "suggested_fix": {"type": "string"},
                     "confidence": {"type": "number"},
                 },
-                "required": ["kind", "severity", "evidence", "confidence"],
+                "required": ["kind", "severity", "location", "evidence", "confidence"],
             },
         },
     },
@@ -174,38 +178,49 @@ DOMAIN_SCHEMA = {
 }
 
 
-DOMAIN_SYSTEM_TEMPLATE = """You are a senior physics referee acting as a specialist in
+DOMAIN_SYSTEM_TEMPLATE = """You are a senior physics referee specialising as a
 {persona}. You have been shown a manuscript's title, abstract, section
 headings, and introduction. Apply the specialist checklist below to
 identify substantive concerns the generic reviewer would miss.
 
-SUBDOMAIN CHECKLIST:
+SUBDOMAIN CHECKLIST (guidance — NOT a to-do list; each item does NOT require a finding):
 {checklist}
 
-FINDING KINDS:
-- domain_concern: A substantive issue specific to this subdomain
-  (e.g., missing gauge specification, unclear PN order, ignored
-  backreaction, undefined boundary conditions).
-- assumption_check: An assumption made implicitly that should be
-  stated explicitly (e.g., slow-roll validity, weak-coupling limit).
-- convention_check: A convention that is standard in the field but
-  the paper does not confirm (e.g., natural units, metric signature,
-  choice of gauge).
-- info: A descriptive observation, not requiring author action.
+FINDING KIND (there is only one):
+- domain_concern: A substantive subdomain-specific issue. Examples:
+  missing gauge specification, unclear PN order, ignored backreaction,
+  undefined boundary conditions, wrong regime of validity claimed,
+  unstated slow-roll validity, unstated weak-coupling limit, unstated
+  thermodynamic limit, missing choice of gauge / boundary / metric
+  signature / natural units, implicit assumptions used without warning.
 
-SEVERITY:
+SEVERITY (only two):
 - critical: A central claim rests on the unaddressed issue.
-- warning: The referee would ask the author to clarify.
-- info: A note; no action required.
+- warning: The referee would ask the author to clarify before publication.
 
-STRICTNESS:
+STRICT RULES:
 
-Only raise concerns for which the paper as summarised gives you concrete
-evidence of the omission. If the abstract or introduction addresses the
-issue, do not flag it. Prefer 3-6 focused findings over a long list.
+1. Silence is the default. An empty findings list is the CORRECT answer
+   whenever the paper as summarised does not contain a concrete concern.
+   Do NOT fabricate concerns to fill a quota. Do NOT emit generic
+   "the paper could benefit from more discussion of X" filler.
 
-If the paper falls outside your subdomain expertise (mismatched subdomain
-routing), return zero findings with a single 'info' note saying so."""
+2. Evidence must be a SHORT (1-2 sentences) direct quote or a specific
+   reference to text in the abstract, section headings, or introduction
+   provided. Do NOT paraphrase — quote the exact phrase that concerns you.
+
+3. Location must be specific: "Section 3.1", "Abstract sentence 2",
+   "Equation 4". Do not use vague locations like "Throughout" or "General".
+
+4. If the checklist item is satisfied by what you see, do NOT flag it.
+
+5. If the paper falls outside your subdomain expertise (mismatched
+   routing), return an empty findings list — no filler note.
+
+6. Confidence must be >= 0.5 for a finding to be worth surfacing.
+   Anything below is speculation and should be omitted entirely.
+
+Target: 0-4 findings. Empty is common and correct. Never exceed 5."""
 
 
 def _classification_for(doi: str) -> Optional[dict]:
@@ -265,6 +280,19 @@ INTRODUCTION (excerpt):
 EQUATIONS: {parsed.get('equation_count', 0)}   PAGES: {parsed.get('n_pages', 0)}"""
 
 
+def _dedupe_findings(findings: list[DomainFinding]) -> list[DomainFinding]:
+    """Same (location, kind) collapses to one finding. Keeps first occurrence."""
+    seen: set[tuple[str, str]] = set()
+    out = []
+    for f in findings:
+        key = ((f.location or "").strip().lower(), f.kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+    return out
+
+
 def analyze_domain(doi: str, client: Optional[GeminiClient] = None) -> DomainReport:
     if client is None:
         client = GeminiClient()
@@ -288,9 +316,9 @@ def analyze_domain(doi: str, client: Optional[GeminiClient] = None) -> DomainRep
 {_format_paper(parsed)}
 
 
-Apply your specialist checklist. Return concrete findings only.
-If a checklist item is satisfied by what you see, do NOT create an
-'info' finding for it — silence is the default."""
+Apply your specialist checklist as GUIDANCE. Emit concrete findings ONLY
+when you can quote the exact text in the paper that concerns you.
+Empty findings list is the correct answer whenever nothing concrete is wrong."""
 
     result = client.structured_call(
         model=CONFIG["gemini"]["model_specialist"],
@@ -299,24 +327,38 @@ If a checklist item is satisfied by what you see, do NOT create an
         tool_name="record_domain_findings",
         tool_description="Record subdomain-specific referee findings for the manuscript.",
         tool_input_schema=DOMAIN_SCHEMA,
-        max_output_tokens=3500,
+        max_output_tokens=1500,
         fallback_models=CONFIG["gemini"].get("fallback_chain", []),
     )
 
+    raw_findings: list[DomainFinding] = []
     for f in result.tool_input.get("findings", []):
-        report.findings.append(DomainFinding(
+        # Defensive: schema restricts kind + severity but strip drift.
+        if f.get("severity") not in ("critical", "warning"):
+            continue
+        if f.get("kind") != "domain_concern":
+            continue
+        try:
+            conf = float(f.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if conf < 0.5:
+            continue
+        raw_findings.append(DomainFinding(
             kind=f["kind"],
             severity=f["severity"],
             location=f.get("location", ""),
             evidence=f["evidence"],
             suggested_fix=f.get("suggested_fix", ""),
-            confidence=f.get("confidence", 0.0),
+            confidence=conf,
         ))
+
+    # Post-hoc dedup: same (location, kind) collapses.
+    report.findings = _dedupe_findings(raw_findings)
 
     report.n_findings = len(report.findings)
     report.n_critical = sum(1 for f in report.findings if f.severity == "critical")
     report.n_warning = sum(1 for f in report.findings if f.severity == "warning")
-    report.n_info = sum(1 for f in report.findings if f.severity == "info")
     report.model = result.model
     report.input_tokens = result.input_tokens
     report.output_tokens = result.output_tokens
