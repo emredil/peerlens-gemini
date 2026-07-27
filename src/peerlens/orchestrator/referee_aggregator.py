@@ -19,6 +19,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Literal, Optional
 
+from peerlens.orchestrator.claim_render import render_claims_section
 from peerlens.settings import get_path
 from peerlens.orchestrator.math_aggregator import aggregate as aggregate_math
 from peerlens.orchestrator.scoring import score_paper, save_triage_score
@@ -47,6 +48,8 @@ class RefereeReport:
     domain_json: dict = field(default_factory=dict)
     reproducibility_json: dict = field(default_factory=dict)
     policy_json: dict = field(default_factory=dict)
+    claims_json: dict = field(default_factory=dict)
+    field_top: str = "physics" 
 
 
 VERDICT_SEVERITY = {
@@ -194,6 +197,23 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         except _json_stdlib.JSONDecodeError:
             policy_json = {}
 
+    cls_path = processed / "classifications" / f"{doi_label}.json"
+    cls_json: dict = {}
+    if cls_path.exists():
+        try:
+            cls_json = _json_stdlib.loads(cls_path.read_text())
+        except _json_stdlib.JSONDecodeError:
+            cls_json = {}
+    field_top = cls_json.get("field_top", "physics")
+
+    claims_path = processed / "claims" / f"{doi_label}.json"
+    claims_json: dict = {}
+    if claims_path.exists():
+        try:
+            claims_json = _json_stdlib.loads(claims_path.read_text())
+        except _json_stdlib.JSONDecodeError:
+            claims_json = {}
+
     overall = _combine_verdicts(math_rep.verdict, novelty_verdict,
                                 structure_verdict, domain_verdict, repro_verdict)
 
@@ -239,6 +259,8 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         domain_json=domain_json,
         reproducibility_json=repro_json,
         policy_json=policy_json,
+        claims_json=claims_json,
+        field_top=field_top,
     )
 
 
@@ -258,9 +280,19 @@ def save_referee_report(report: RefereeReport) -> Path:
 _SEV_ORDER = {"critical": 0, "warning": 1, "info": 2}
 
 
-def _render_math_section(math_json: dict) -> list[str]:
-    """Compact math section — reuse patterns from math_aggregator's renderer."""
+def _render_math_section(math_json: dict, field_top: str = "physics") -> list[str]:
     lines = []
+    if field_top in ("math", "biology"):
+        lines.append("## Numerical / symbolic verification")
+        lines.append("")
+        lines.append(
+            "_Not applicable to this paper (field: `" + field_top + "`). "
+            "Dimensional and symbolic checks target physics and chemistry equations; "
+            "math and biology papers are routed through domain expert and structure agents. "
+            "Extracted claims appear in the section above._"
+        )
+        lines.append("")
+        return lines
     if math_json.get("verdict") == "insufficient_data":
         lines.append("## Mathematical analysis")
         lines.append("")
@@ -442,7 +474,8 @@ def render_markdown(report: RefereeReport) -> str:
     # on disk (editor opted in). Does not influence the triage score.
     if report.policy_json:
         lines.extend(_render_policy_section(report.policy_json))
-    lines.extend(_render_math_section(report.math_json))
+    lines.extend(render_claims_section(report.claims_json, report.field_top))
+    lines.extend(_render_math_section(report.math_json, report.field_top))
     lines.extend(_render_novelty_section(
         report.novelty_json, report.novelty_verdict,
         report.overall_reason if report.novelty_verdict == report.overall_verdict else "",

@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peerlens.gemini_client import GeminiClient
 from peerlens.agents.claim_extractor import extract_claims, save_claims
+from peerlens.agents.classifier import classify_paper, save_classification
 from peerlens.agents.dimensional_checker import check_paper as dim_check, save_report as save_dim
 from peerlens.agents.sympy_verifier import verify_paper, save_report as save_sym
 from peerlens.agents.novelty_agent import analyze_novelty, save_report as save_nov
@@ -72,9 +73,17 @@ def run_one(doi: str, pdf_path: Path, client: GeminiClient, *, check_llm: bool =
         claims_data = json.loads(claims_path.read_text())
         stages_done.append("claims")
 
+        cls_path = get_path("processed_data") / "classifications" / f"{doi}.json"
+        if not cls_path.exists():
+            cls = classify_paper(parsed, client=client)
+            save_classification(cls, cls_path.parent)
+        stages_done.append("classification")
+
         dim_path = get_path("processed_data") / "dimensional_reports" / f"{doi}.json"
         if not dim_path.exists():
-            rep = dim_check(claims_data, pdf_path, max_vision_calls=2, client=client)
+            cls_data = json.loads(cls_path.read_text()) if cls_path.exists() else {}
+            field_top = cls_data.get("field_top", "physics")
+            rep = dim_check(claims_data, pdf_path, max_vision_calls=2, client=client, field=field_top)
             save_dim(rep)
         stages_done.append("dimensional")
 

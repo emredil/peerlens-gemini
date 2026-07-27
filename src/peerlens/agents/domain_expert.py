@@ -131,6 +131,278 @@ DOMAIN_PROMPTS = {
             "For quantum thermodynamics: are work / heat definitions consistent?",
         ],
     },
+
+    # ============================================================
+    # Mathematics
+    # ============================================================
+    "math_algebra": {
+        "persona": "algebraist",
+        "checklist": [
+            "Are the ring / group / module hypotheses (commutative, Noetherian, finitely generated, characteristic) stated at each use?",
+            "For category-theoretic constructions: are functor / natural transformation definitions checked on morphisms, not just objects?",
+            "Are quotient constructions accompanied by a check that the equivalence relation is compatible (well-defined operations)?",
+            "For representation-theoretic claims: is the ground field / characteristic explicit? Are semisimplicity / irreducibility conditions checked?",
+            "Are universal properties invoked correctly, with existence AND uniqueness parts addressed?",
+            "For homological arguments: are chain complex boundedness / exactness conditions verified?",
+            "Are examples given for non-trivial abstract definitions?",
+            "Is the distinction between 'up to isomorphism' vs 'equal' respected where it matters?",
+        ],
+    },
+    "math_algebraic_geometry": {
+        "persona": "algebraic geometer",
+        "checklist": [
+            "Are schemes / varieties described with their base field / base scheme explicit?",
+            "Is the difference between closed points, geometric points, and generic points respected?",
+            "For sheaf-cohomological claims: is the topology (Zariski, étale, fppf) specified? Are coefficient sheaves explicit?",
+            "Are properness / separatedness / smoothness hypotheses stated where invoked (base change, GAGA, Serre duality)?",
+            "For moduli problems: is the representability / stackiness addressed?",
+            "Are singularities characterized (nodal, ADE, log-canonical, terminal) when relevant?",
+            "Is the distinction between coarse and fine moduli spaces made where it matters?",
+            "For characteristic-p claims: are Frobenius / Verschiebung / crystalline subtleties addressed?",
+        ],
+    },
+    "math_analysis": {
+        "persona": "analyst (real / complex / functional / PDE)",
+        "checklist": [
+            "Are function spaces (Sobolev, Besov, Hölder, L^p) specified with their exponents and domains?",
+            "For PDE existence / uniqueness: are boundary conditions and function-space regularity precise?",
+            "Are weak / strong / distributional solutions distinguished where the difference matters?",
+            "For inequalities: are the constants explicit or are they claimed to depend on which parameters?",
+            "Are convergence claims stated in a named topology (a.e., in L^p, weakly, strongly)?",
+            "For operator arguments: are domain, closed extension, self-adjointness, and spectrum addressed?",
+            "For nonlinear PDE: are blowup / global existence hypotheses matched to the equation's structure?",
+            "Are limiting arguments (compactness, weak convergence, extraction) justified rather than asserted?",
+        ],
+    },
+    "math_topology_geometry": {
+        "persona": "topologist / differential geometer",
+        "checklist": [
+            "Are manifold hypotheses (dimension, orientability, compactness, smoothness class) stated?",
+            "For (co)homology arguments: is the coefficient ring specified? Are naturality conditions checked?",
+            "For fiber bundles / fibrations: are local triviality / lifting conditions explicit?",
+            "Are curvature / connection choices (Levi-Civita, principal-connection) named and consistent?",
+            "For gauge-theoretic constructions: is the structure group and its action explicit?",
+            "For characteristic classes: is the base of the classifying space / bundle addressed?",
+            "Are geometric / topological invariants stated with their normalization convention?",
+            "For low-dimensional topology: are surgery / handle-decomposition / Heegaard structures given?",
+        ],
+    },
+    "math_combinatorics": {
+        "persona": "combinatorist",
+        "checklist": [
+            "Are graph / hypergraph / poset / matroid definitions given (directed, simple, weighted, labelled)?",
+            "For enumeration: are generating function types (ordinary, exponential, Dirichlet) and their formal-vs-analytic status clear?",
+            "Are extremal claims accompanied by matching constructions or lower / upper bounds?",
+            "For probabilistic method arguments: are independence / concentration hypotheses stated?",
+            "Is the difference between 'exact' and 'asymptotic' results respected in statements?",
+            "For algebraic combinatorics: is the representation-theoretic or symmetric-function context explicit?",
+            "Are algorithmic complexity claims backed by a computational model?",
+            "Are recurrences / bijections stated with initial conditions AND correctness argument?",
+        ],
+    },
+    "math_number_theory": {
+        "persona": "number theorist",
+        "checklist": [
+            "For automorphic / L-function arguments: is the level, weight, character, and functional equation stated?",
+            "Are analytic estimates (subconvexity, effective bounds) explicit in the constants they depend on?",
+            "For arithmetic geometry / Diophantine claims: are heights (Weil, Faltings, canonical) defined with their normalization?",
+            "Is the field of definition and its Galois group tracked through constructions?",
+            "For p-adic arguments: is the choice of embedding / ramification explicit?",
+            "Are conjectural inputs (Riemann hypothesis, BSD, Langlands) flagged as assumptions?",
+            "For sieve / analytic arguments: are error terms bounded rather than absorbed silently?",
+            "Are ineffective results explicitly labelled as such?",
+        ],
+    },
+    "math_probability": {
+        "persona": "probabilist / stochastic analyst",
+        "checklist": [
+            "Are underlying probability spaces / filtrations / independence structures specified?",
+            "For stochastic differential equations: is the SDE solution notion (strong / weak / martingale problem) precise?",
+            "Are convergence theorems invoked with their hypotheses (uniform integrability, tightness, Skorohod)?",
+            "For random matrix / random graph models: is the model definition unambiguous (edge probability, symmetric matrix ensemble)?",
+            "Are large-deviation / concentration statements accompanied by rate functions or explicit constants?",
+            "For Markov / mixing arguments: are ergodicity / spectral gap / drift conditions stated?",
+            "Is the distinction between quenched vs annealed / in-probability vs almost-sure results maintained?",
+            "For couplings / percolation: are monotonicity / stochastic-dominance conditions verified?",
+        ],
+    },
+    "math_logic": {
+        "persona": "mathematical logician / foundational theorist",
+        "checklist": [
+            "Are the underlying theory / language / signature explicit?",
+            "For consistency / independence claims: is the base theory (ZFC, ZF, PA, ...) stated?",
+            "Are model-theoretic hypotheses (saturation, stability, o-minimality) invoked with their standard meaning?",
+            "For forcing / large cardinal arguments: is the type of iteration / cardinal invariant clear?",
+            "Are computability / decidability claims stated relative to a specific reduction (Turing, many-one, polynomial)?",
+            "For proof-theoretic arguments: is the ordinal / consistency strength calibrated?",
+            "Are categoricity / non-standard model results accompanied by explicit examples?",
+            "Is the distinction between 'provable' vs 'true in a model' respected?",
+        ],
+    },
+
+    # ============================================================
+    # Chemistry
+    # ============================================================
+    "chem_organic": {
+        "persona": "organic chemist",
+        "checklist": [
+            "Are synthesis procedures reproducible? (equivalents, temperatures, times, solvents, workup, purification)",
+            "For new compounds: are full characterization data (1H/13C NMR, HRMS, IR, mp) reported?",
+            "Is the mechanistic proposal supported by experimental evidence (labelling, kinetics, intermediates)?",
+            "For stereochemistry claims: is the assignment method explicit (NOE, X-ray, chemical correlation)?",
+            "Are yields, dr / ee values, and scope substrate scope reported honestly with substrates that failed?",
+            "For catalysis: is the turnover number / frequency reported? Are control experiments (no catalyst, alternative catalyst) shown?",
+            "Are reactions checked for reproducibility (multiple runs, different batches)?",
+            "Is the novelty compared to prior art with concrete comparisons, not just citation lists?",
+        ],
+    },
+    "chem_inorganic": {
+        "persona": "inorganic / organometallic chemist",
+        "checklist": [
+            "For new complexes: are crystallographic data (CCDC deposition, R-factors, ORTEP) reported?",
+            "Is the oxidation state / d-electron count / spin state assignment justified?",
+            "For catalytic mechanisms: are the resting state and rate-determining step supported by evidence?",
+            "Are ligand-field / MO / DFT arguments consistent with observed magnetism / EPR / UV-vis?",
+            "For coordination geometries: are bond lengths / angles compared with literature averages?",
+            "Are air- / moisture-sensitive procedures clearly documented (glovebox, Schlenk, drybox)?",
+            "For nanomaterials: are size / composition / phase confirmed by multiple techniques (TEM, XRD, XPS)?",
+            "Is the difference between 'proposed' and 'demonstrated' mechanism made clear?",
+        ],
+    },
+    "chem_physical": {
+        "persona": "physical chemist / spectroscopist",
+        "checklist": [
+            "Are spectroscopic assignments (IR, Raman, UV-vis, NMR, MS) justified with reference compounds or DFT?",
+            "For kinetics: is the rate law derived from data or assumed? Are pseudo-first-order conditions verified?",
+            "Are thermodynamic quantities (ΔH, ΔS, ΔG) obtained by van't Hoff / Eyring plots with error analysis?",
+            "For time-resolved experiments: are instrument response function, deconvolution, and fit residuals reported?",
+            "Are spectroscopic transitions assigned to specific vibrational / electronic modes rather than 'bands'?",
+            "For photochemistry: is the quantum yield reported with actinometry?",
+            "Are solvent, temperature, and concentration dependencies characterized rather than assumed?",
+            "For electrochemistry: are electrodes, reference, scan rates, and cell configuration specified?",
+        ],
+    },
+    "chem_computational": {
+        "persona": "computational chemist",
+        "checklist": [
+            "Are the level of theory (functional, basis set, dispersion correction) and their justification stated?",
+            "For DFT: is the functional appropriate for the problem (dispersion, transition states, spin-symmetry breaking)?",
+            "Are geometries confirmed as minima / TS by frequency analysis? Are imaginary frequencies characterized?",
+            "For solvation: is the model (implicit continuum, explicit, mixed) appropriate?",
+            "Are basis-set superposition and completeness effects addressed (counterpoise, extrapolation)?",
+            "For excited states: is the method (TDDFT, CASSCF, EOM-CC) appropriate for the state type?",
+            "Are benchmarks against experiment or higher-level theory provided?",
+            "For MD: are equilibration, sampling, and finite-size effects controlled?",
+        ],
+    },
+    "chem_analytical": {
+        "persona": "analytical chemist",
+        "checklist": [
+            "Are method validation parameters (LOD, LOQ, linearity range, accuracy, precision) reported?",
+            "For quantification: are internal standards, calibration curves, and matrix effects addressed?",
+            "Are chromatographic conditions (column, gradient, flow, injection) reproducible?",
+            "For mass spectrometry: are ionization mode, mass accuracy, and fragmentation patterns reported?",
+            "Are sample preparation / extraction recoveries validated?",
+            "For trace analysis: are blanks, background subtraction, and interference tests documented?",
+            "Are statistical tests appropriate for the sample size (parametric vs non-parametric, replicate design)?",
+            "Are reference materials / standards traceable to certified sources?",
+        ],
+    },
+    "chem_biochem_medicinal": {
+        "persona": "biochemist / medicinal chemist",
+        "checklist": [
+            "For enzyme kinetics: are Km, kcat, and mechanism (single/double displacement) fit properly?",
+            "Are protein characterization data (purity SDS-PAGE, MW by MS, oligomeric state) reported?",
+            "For drug design: is SAR analysis systematic? Are potency, selectivity, and physicochemical properties reported?",
+            "Are binding affinity measurements (ITC, SPR, fluorescence) accompanied by control experiments?",
+            "For cell / animal assays: is n, replicate independence, and statistical analysis appropriate?",
+            "Are compound identity and purity (LC-MS, HPLC) confirmed before biological testing?",
+            "For structural biology: are resolution, R-factors, Ramachandran statistics reported?",
+            "Are conflict-of-interest / ADME / toxicity implications addressed if drug development is claimed?",
+        ],
+    },
+
+    # ============================================================
+    # Biology
+    # ============================================================
+    "bio_molecular": {
+        "persona": "molecular biologist / geneticist",
+        "checklist": [
+            "Are cell lines, strains, and constructs authenticated with source and passage / lot info?",
+            "For gene manipulation: are guide RNA sequences, homology arms, and off-target checks reported?",
+            "Are Western / Northern / Southern blots quantified with loading controls and n>=3 replicates?",
+            "For sequencing: are read depth, mapping quality, and variant calling parameters specified?",
+            "Are statistical tests appropriate for the data type (Student's t vs Mann-Whitney vs mixed models)?",
+            "For knockout / knockdown experiments: are rescue experiments performed?",
+            "Are antibody catalog numbers, dilutions, and validation data reported?",
+            "Is the difference between 'correlation' and 'causation' respected in the claims?",
+        ],
+    },
+    "bio_cell_dev": {
+        "persona": "cell biologist / developmental biologist",
+        "checklist": [
+            "Are cell types, culture conditions, and passage numbers specified?",
+            "For imaging: are microscope, objective, exposure, and image analysis parameters reported?",
+            "Are live vs fixed imaging distinctions made? Are photobleaching / phototoxicity controls performed?",
+            "For lineage tracing: is the labelling strategy (Cre driver, reporter) unambiguous?",
+            "Are developmental staging criteria (embryonic day, somite count, Nieuwkoop / Faber stage) explicit?",
+            "For quantification: are cells / embryos independent replicates or technical replicates?",
+            "Are morphological claims backed by 3D reconstructions when 2D is insufficient?",
+            "For organoid / iPSC work: is the derivation protocol reproducible and validated?",
+        ],
+    },
+    "bio_ecology_evolution": {
+        "persona": "ecologist / evolutionary biologist",
+        "checklist": [
+            "Are sampling design, sample size, and replication levels appropriate for the ecological question?",
+            "For phylogenetics: are tree-building method, model selection, and support values (bootstrap, posterior) reported?",
+            "Are selection tests (dN/dS, Tajima's D, McDonald-Kreitman) applied with the correct null hypothesis?",
+            "For field studies: are environmental covariates, geographic scale, and pseudoreplication addressed?",
+            "Are population-genetic estimators (Fst, He, Ne) computed with appropriate models?",
+            "For species interactions: is the causal inference (correlation, experiment, natural experiment) clear?",
+            "Are climate / disturbance / historical baselines properly established?",
+            "Is the study's generalizability beyond the studied system explicit rather than implied?",
+        ],
+    },
+    "bio_neuroscience": {
+        "persona": "neuroscientist",
+        "checklist": [
+            "Are animal / human subject demographics, n, and randomization / blinding described?",
+            "For electrophysiology: are recording electrode type, sampling rate, filter, and spike-sorting parameters reported?",
+            "For behavior: is task design controlled for confounds (novelty, arousal, motivation, side bias)?",
+            "For imaging (fMRI, calcium, EEG): are preprocessing pipeline, atlas, and statistical correction appropriate?",
+            "Are neural population claims supported by adequate n neurons / voxels and cross-validation?",
+            "For optogenetics / chemogenetics: are targeting specificity and control conditions demonstrated?",
+            "Are causal claims from correlational imaging appropriately hedged?",
+            "For clinical work: are diagnostic criteria, medication effects, and IRB approval reported?",
+        ],
+    },
+    "bio_bioinformatics_systems": {
+        "persona": "bioinformatician / systems biologist",
+        "checklist": [
+            "Are datasets, versions, and preprocessing pipelines documented reproducibly?",
+            "For sequence analysis: are aligner, reference version, and parameter settings specified?",
+            "Are batch effects, technical vs biological replicates, and normalization methods appropriate?",
+            "For machine learning: are training / validation / test splits reported? Are cross-validation and hyperparameter search described?",
+            "Are multiple-testing corrections applied appropriately (FDR, Bonferroni)?",
+            "For network / pathway analysis: are gene set enrichment methods and background sets correct?",
+            "Is code deposited with version tags? Are dependencies pinned?",
+            "For predictive claims: is the negative control / permutation baseline reported?",
+        ],
+    },
+    "bio_biomedicine": {
+        "persona": "biomedical / clinical researcher",
+        "checklist": [
+            "Are sample size, power calculation, and pre-registration status reported?",
+            "For clinical / preclinical trials: are randomization, blinding, and inclusion / exclusion criteria explicit?",
+            "Are primary vs secondary endpoints declared before analysis?",
+            "For diagnostic / prognostic biomarkers: are sensitivity, specificity, AUC, and confidence intervals given?",
+            "Are patient demographics, comorbidities, and treatment history balanced across groups?",
+            "For epidemiological claims: are confounders identified and adjusted for (DAG, multivariable model)?",
+            "Are adverse events, dropouts, and protocol deviations reported?",
+            "Is translational relevance (animal model vs human, dose scaling) discussed rather than assumed?",
+        ],
+    },
 }
 
 

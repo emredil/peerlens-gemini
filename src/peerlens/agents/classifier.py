@@ -1,4 +1,4 @@
-"""Classifier agent (Gemini port): subdomain + paper type via structured output."""
+"""Classifier agent — multi-field (physics / math / chem / bio) subdomain + paper type."""
 from __future__ import annotations
 
 import json
@@ -7,6 +7,7 @@ from pathlib import Path
 
 from peerlens.classification.taxonomy import (
     SUBDOMAIN_CODES, SUBDOMAIN_DESCRIPTIONS, PAPER_TYPES,
+    field_from_subdomains,
 )
 from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
@@ -24,6 +25,7 @@ class ClassificationResult:
     doi_label: str
     subdomains: list[str] = field(default_factory=list)
     paper_types: list[str] = field(default_factory=list)
+    field_top: str = "physics"
     subdomain_confidence: dict[str, float] = field(default_factory=dict)
     paper_type_confidence: dict[str, float] = field(default_factory=dict)
     rationale: str = ""
@@ -37,7 +39,8 @@ def _build_system_prompt() -> str:
         f"  - {code}: {SUBDOMAIN_DESCRIPTIONS[code]}"
         for code in SUBDOMAIN_CODES
     )
-    return f"""You are a physics manuscript classifier trained to mimic SciPost Physics editorial decisions.
+    return f"""You are a scientific manuscript classifier covering four top-level
+fields: PHYSICS, MATHEMATICS, CHEMISTRY, BIOLOGY.
 
 Given a paper's title, abstract, section headings, and introduction snippet,
 assign:
@@ -49,25 +52,61 @@ SUBDOMAIN vocabulary:
 
 CRITICAL LABELLING PRINCIPLES:
 
-1. Be MINIMAL. SciPost editors typically assign 1-2 specialties, sometimes just
-   1. Assign a subdomain only if it is a *primary* focus of the paper. Do NOT
-   tag every topic the paper touches.
+1. TOP-LEVEL FIELD FIRST. Physics subdomains start without prefix
+   (cmp_theory, hep_theory, quantum_physics, ...). Math subdomains use
+   `math_*` prefix. Chem: `chem_*`. Bio: `bio_*`. A paper belongs to
+   ONE primary top-level field. Do not mix top-level codes unless the
+   paper is genuinely at a field boundary (rare).
 
-2. `quantum_physics` is reserved for quantum information, quantum computing,
-   quantum protocols, quantum measurement theory. NOT a catch-all for any
-   paper mentioning quantum mechanics.
+2. `math_physics` is a PHYSICS subdomain, not a math subdomain. Use it
+   for physics papers with heavy mathematical formalism. Use `math_*`
+   codes ONLY for pure mathematics papers (theorem-proof structure,
+   no physical system as the central object).
 
-3. `math_physics` is a secondary label. Add it when the central contribution
-   is a mathematical result applied to a physics system.
+3. `chem_computational` is CHEMISTRY with computational methods, not
+   physics. If the paper's central object is a molecule / material /
+   reaction and the computation is DFT / MD / ab initio, it's chem.
+   If the central object is a physical model (Hamiltonian, lattice,
+   field theory) and the computation is Monte Carlo / diagonalization,
+   it's physics.
 
-4. PAPER TYPE criteria:
+4. `bio_bioinformatics_systems` covers computational biology (sequence
+   analysis, gene networks, systems biology). NOT the same as
+   biophysics — biophysics goes under statistical_soft (physics).
+
+4a. BIOLOGICAL SYSTEMS TAKE PRECEDENCE. If the paper's central object
+   is a living biological system — cell, tissue, organ, organism,
+   protein function, gene regulation, ecology, evolution, neural
+   circuit — classify it under bio_* codes EVEN IF the methodology
+   is physics-like (reaction-diffusion, statistical mechanics, PDE
+   modeling, coupled oscillators). statistical_soft is reserved for
+   physics papers whose central object is a soft-matter PHYSICAL
+   model (colloids, active matter as a physical system, glass
+   transition in a physical medium), not a biological process
+   modelled by physics tools. Example: 'calcium signaling in cells'
+   is bio_cell_dev even if modelled with coupled ODEs; 'active
+   matter in colloidal suspensions' is statistical_soft.
+
+5. Be MINIMAL. 1-2 subdomains is typical. Assign a subdomain only if
+   it is a *primary* focus of the paper. Do NOT tag every topic the
+   paper touches.
+
+6. `quantum_physics` is reserved for quantum information, quantum
+   computing, quantum protocols, quantum measurement theory. NOT a
+   catch-all for any paper mentioning quantum mechanics.
+
+7. PAPER TYPE criteria:
    - `theoretical`: derivations, models, analytical results, proofs.
    - `computational`: numerical simulations or heavy data-driven analysis.
-   - `experimental`: new measurements or apparatus. Rare in SciPost Physics.
-   - `phenomenological`: bridging theory with observable signatures,
-     typically HEP. Often combined with `computational` for MC simulations.
+   - `experimental`: new measurements or apparatus.
+   - `phenomenological`: bridging theory with observable signatures.
 
-5. Prefer accuracy over coverage. Omit uncertain tags."""
+8. Prefer accuracy over coverage. Omit uncertain tags.
+
+CROSS-FIELD NOTE: The few-shot examples below are all physics papers.
+Learn the LABELLING STYLE from them (minimal, top-level-first, subdomain
+codes), then apply the same style to whichever field the target paper
+falls under. Do not force a math / chem / bio paper into physics codes."""
 
 
 CLASSIFY_SCHEMA = {
@@ -191,10 +230,12 @@ def classify_paper(parsed_paper: dict, client: GeminiClient | None = None) -> Cl
     )
 
     payload = result.tool_input
+    subs = payload.get("subdomains", []) or []
     return ClassificationResult(
         doi_label=parsed_paper["doi_label"],
-        subdomains=payload.get("subdomains", []),
-        paper_types=payload.get("paper_types", []),
+        subdomains=subs,
+        paper_types=payload.get("paper_types", []) or [],
+        field_top=field_from_subdomains(subs),
         subdomain_confidence=payload.get("subdomain_confidence", {}) or {},
         paper_type_confidence=payload.get("paper_type_confidence", {}) or {},
         rationale=payload.get("rationale", ""),

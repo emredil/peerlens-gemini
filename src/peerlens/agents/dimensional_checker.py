@@ -275,12 +275,22 @@ def check_paper(
     pdf_path: Path,
     max_vision_calls: int = 3,
     client: GeminiClient | None = None,
+    field: str = "physics",
 ) -> DimensionalReport:
     if client is None:
         client = GeminiClient()
 
     doi = claims_data.get("doi_label", "")
     report = DimensionalReport(doi_label=doi)
+
+    # Field gate: dimensional analysis is meaningful for physical quantities
+    # with units. Math papers deal with dimensionless topological / algebraic
+    # objects. Biology papers describe processes with parameters whose
+    # dimensional consistency is rarely the referee's primary concern.
+    # Chemistry and physics both benefit from the check.
+    if field in ("math", "biology"):
+        report.gate_reason = f"skipped: field={field} (dimensional check not applicable)"
+        return report
 
     tier_a_findings, in_a, out_a, need_vision = tier_a_check(claims_data, client=client)
     report.findings.extend(tier_a_findings)

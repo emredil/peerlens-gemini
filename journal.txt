@@ -1,0 +1,136 @@
+
+## 2026-07-26 (session continuation) — Faz 2 D + (2+3)
+
+Sealed:
+  Faz 2 D — LLM detector (opt-in, gemini-flash-latest, ~$0.001/paper)
+    Verdict schema likely_human/unclear/possibly_llm/likely_llm.
+    Not part of triage score. CLI: --check-llm; web UI: checkbox.
+    Dashboard: colored pill badges in DOI cell.
+  Faz 2 (2+3) — domain + structure restabilised
+    Domain: 0% → 83% stability
+    Structure: 33% → 100% stability
+    Score variance across 3 full-pipeline runs: max spread 8 points,
+    all verdicts stable. Hash cache deferred, not needed.
+
+Design lesson recorded:
+  Any prompt line of the form "Prefer N findings" or "Aim for at most
+  N-M" acts as an implicit quota. When agents have no genuine findings,
+  they fabricate to fill quota, rotating fabrications each run. Rule:
+  never mention target counts in prompts. Say "silence is default,
+  empty list is correct" instead.
+
+Pending at seal:
+  Faz 2 E (30-50 paper calibration) — deferred to post-deployment
+    when real editor feedback is available.
+  Novelty agent — 4% stability; deferred until novelty-specific work.
+  Deployment (fly.io demo) — deferred until multi-domain coverage.
+  Math / chemistry / biology domain extensions — next up in this chat.
+
+## 2026-07-27 — Faz 3 (partial) — multi-domain expansion
+
+Sealed:
+  Adım 1 — Field tag: classifier now derives field_top ∈
+    {physics, math, chemistry, biology} from primary subdomain code.
+    Downstream agents can gate or specialise on this.
+  Adım 2 — Dimensional checker field gate: math + biology skip the
+    dimensional stage entirely; physics + chemistry keep original
+    behaviour. DimensionalReport carries gate_reason when skipped.
+  Adım 3 — Claim extractor field-conditional dispatch:
+    - Physics + chemistry keep the original schema (sympy + dimensional
+      are wired for this vocabulary).
+    - Math: theorem / lemma / proposition / corollary / definition /
+      criterion / conjecture, each with hypothesis + conclusion +
+      proof_hint. verification_method in {formal_proof,
+      counterexample_search, reference_check, unverifiable_by_tool}.
+    - Biology: hypothesis / model_equation / model_parameter /
+      empirical_measurement / qualitative_prediction /
+      statistical_claim / data_availability. verification_method in
+      {reproduce_experiment, reanalyze_data, statistical_recheck,
+      reference_check, model_resimulation, unverifiable_by_tool}.
+    - Chemistry: synthesis_step / characterization_result /
+      performance_metric / calibration_equation / method_parameter /
+      selectivity / stability / validation / mechanism.
+      calibration_equation ALWAYS maps to algebraic_identity so sympy
+      still attempts a symbolic check.
+    - MathClaim dataclass extended with optional hypothesis, conclusion,
+      proof_hint, parameters, measurement_{value, units, uncertainty}
+      so all four schemas share the same envelope.
+  Adım 3 (Blok 3.4) — Markdown render field-aware:
+    - RefereeReport carries field_top + claims_json.
+    - New module src/peerlens/orchestrator/claim_render.py holds four
+      field-specific emitters (math: Theorems / Propositions / ...;
+      bio: Mechanistic hypotheses / Model equations / Measurements /
+      Qualitative predictions; chem: Synthesis / Characterization /
+      Performance / Calibration / ...; physics: Dimensional /
+      Algebraic identity / Limit / Reduction / Symmetry).
+    - _render_math_section now emits "Not applicable" for math + bio
+      instead of the confusing "insufficient data" verdict.
+    - New pipeline stage order: 1 = classification, 2 = claim extraction
+      (field-aware), 3 = dimensional (field-gated), 4-10 unchanged.
+
+Taxonomy expansion:
+  SUBDOMAIN_MAP grew from 15 physics entries to 35 (added 8 math,
+  6 chemistry, 6 biology). DomainPrompts bank grew to 27 personas.
+  Classifier prompt rewritten cross-field with bio-precedence rule
+  (biological system as central object → bio_* even if the method is
+  physics-like coupled oscillators).
+
+Ingestion:
+  New src/peerlens/ingestion/url_fetch.py — generic --url flag that
+  downloads any PDF URL with %PDF magic validation. Works for
+  bioRxiv / medRxiv / personal sites. ChemRxiv is Cloudflare-protected
+  so users must download the PDF and use --pdf (help text notes this).
+  ChemRxiv-specific fetch module was removed; the API endpoint
+  returned 403 without auth and was not worth chasing.
+
+Verification with real papers:
+  arXiv:2401.09327  (math.GT, Teichmüller theory) → math_topology_geometry,
+    persona topologist / differential geometer, 6 formal statements
+    extracted (Theorems, Propositions, Lemmas, Criterion), sympy skips
+    correctly because verification_method is formal_proof / reference_check.
+  arXiv:2607.21442  (q-bio.CB, calcium signaling + Kuramoto) →
+    bio_cell_dev (bio-precedence rule fired correctly, would otherwise
+    have gone to statistical_soft), persona cell biologist /
+    developmental biologist, 4 claims (hypothesis, model_equation,
+    qualitative_prediction, empirical_measurement).
+  chemrxiv.15006467/v1  (analytical chem, MXene sensor) →
+    chem_analytical, persona analytical chemist, 18 claims spread over
+    7 categories, 2 calibration equations correctly flagged for
+    algebraic_identity, score 92/100 with a real reproducibility
+    concern (missing data availability statement).
+
+Design lessons recorded:
+  - Cross-field agent extension: keep the architecture, replace the
+    vocabulary. Don't force one field's claim types onto another's
+    papers. The chem paper's LOD is not a physics claim, the math
+    paper's Lemma is not a physics equation.
+  - When extending prompts, keep examples abstract. Concrete examples
+    from one specific paper (Ti3AlC2 etching, essentially purely
+    pseudo-Anosov, K/ε = 20) drift the model toward that paper's
+    subdomain even for unrelated inputs. Use domain-general vocabulary
+    (reagents X + Y at temperature T; theorem / lemma / definition;
+    hypothesis / model equation / measurement).
+  - Long heredoc patches with nested triple-quoted strings are
+    fragile. When patch >100 lines with complex escapes → write the
+    function bodies as a separate .py file and patch the caller with
+    just an import + one-line invocation.
+
+Pending at seal:
+  Adım 6 — Domain persona balance. The 20 new personas have checklists
+    but the "silence is default" prompt may be too suppressive; math
+    and bio test papers yielded 0 findings which is plausible for
+    clean papers but not yet validated on borderline cases.
+  Adım 5 — Reproducibility keyword field-conditional. Current keyword
+    lists (Monte Carlo, DMRG, HPLC, PBS ...) are physics + chemistry
+    biased. Bio needs cell line / antibody / n replicates / code
+    deposition; math needs proof rigor cues (or stays gated to
+    scrutiny=none, which is what happens now — acceptable but not
+    ideal).
+  Adım 4 — Structure trigger regex domain-conditional. Current regex
+    (trivially / obvious / it is easy to see / ...) is physics-native.
+    Bio + chem hedge phrases ("we found that", "results indicate",
+    "consistent with") not yet in the trigger list.
+  Deployment (fly.io demo) — deferred until Adım 6 / 5 / 4 land, so
+    the demo represents the full four-domain product.
+  Faz 2 E (30-50 paper calibration) — deferred to post-deployment
+    when real editor feedback is available.

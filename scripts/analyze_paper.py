@@ -42,6 +42,11 @@ from peerlens.ingestion.arxiv import (
     download_pdf as arxiv_download_pdf,
     arxiv_id_to_doi_label,
 )
+from peerlens.ingestion.url_fetch import (
+    download_pdf as url_download_pdf,
+    label_from_url,
+)
+from peerlens.agents.classifier import classify_paper, save_classification
 from peerlens.settings import get_path
 from rich.console import Console
 
@@ -58,6 +63,17 @@ def resolve_input(args) -> tuple[str, Path]:
     """Return (doi_label, pdf_path). Copies external PDFs or downloads from arXiv."""
     pdf_dir = get_path("raw_data") / "pdf"
     pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    if getattr(args, "url", None):
+        url = args.url.strip()
+        doi_label = label_from_url(url)
+        console.print(f"  Source URL:  [white]{url}[/white]")
+        console.print(f"  Label:       {doi_label}")
+        pdf_path = pdf_dir / f"{doi_label}.pdf"
+        if not pdf_path.exists():
+            console.print(f"  [dim]downloading PDF to {pdf_path.name}...[/dim]")
+            url_download_pdf(url, pdf_path)
+        return doi_label, pdf_path
 
     if args.arxiv:
         doi_label = arxiv_id_to_doi_label(args.arxiv)
@@ -142,26 +158,40 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
 
     parsed = ensure_parsed(doi, pdf_path)
 
-    console.print("[cyan]1/9[/cyan] Claim extraction")
+    console.print("[cyan]1/10[/cyan] Classification (subdomain + type + field)")
+    cls_path = get_path("processed_data") / "classifications" / f"{doi}.json"
+    if cls_path.exists():
+        console.print("       [dim]cached[/dim]")
+    else:
+        cls = classify_paper(parsed, client=client)
+        save_classification(cls, cls_path.parent)
+        console.print(f"       subdomains={cls.subdomains}, field={cls.field_top}, types={cls.paper_types}")
+    cls_data = json.loads(cls_path.read_text())
+    field_top = cls_data.get("field_top", "physics")
+
+    console.print("[cyan]2/10[/cyan] Claim extraction (field={0})".format(field_top))
     claims_path = get_path("processed_data") / "claims" / f"{doi}.json"
     if claims_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        res = extract_claims(parsed, client=client)
+        res = extract_claims(parsed, client=client, field=field_top)
         save_claims(res)
         console.print(f"       {res.n_claims_total} claims, {len(res.symbols)} symbols")
     claims_data = json.loads(claims_path.read_text())
 
-    console.print("[cyan]2/9[/cyan] Dimensional analysis")
+    console.print("[cyan]3/10[/cyan] Dimensional analysis")
     dim_path = get_path("processed_data") / "dimensional_reports" / f"{doi}.json"
     if dim_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = dim_check(claims_data, pdf_path, max_vision_calls=2, client=client)
+        rep = dim_check(claims_data, pdf_path, max_vision_calls=2, client=client, field=field_top)
         save_dim(rep)
-        console.print(f"       {rep.n_findings} findings")
+        if getattr(rep, "gate_reason", ""):
+            console.print(f"       [dim]{rep.gate_reason}[/dim]")
+        else:
+            console.print(f"       {rep.n_findings} findings")
 
-    console.print("[cyan]3/9[/cyan] Symbolic verification")
+    console.print("[cyan]4/10[/cyan] Symbolic verification")
     sym_path = get_path("processed_data") / "sympy_reports" / f"{doi}.json"
     if sym_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -171,7 +201,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
         console.print(f"       verified={rep.n_verified}, refuted={rep.n_refuted}, "
                       f"unable={rep.n_unable}")
 
-    console.print("[cyan]4/9[/cyan] Novelty / literature")
+    console.print("[cyan]5/10[/cyan] Novelty / literature")
     nov_path = get_path("processed_data") / "novelty_reports" / f"{doi}.json"
     if nov_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -180,7 +210,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
         save_nov(rep)
         console.print(f"       {rep.n_related_retrieved} related, {rep.n_findings} findings")
 
-    console.print("[cyan]5/9[/cyan] Structure & narrative")
+    console.print("[cyan]6/10[/cyan] Structure & narrative")
     str_path = get_path("processed_data") / "structure_reports" / f"{doi}.json"
     if str_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -189,7 +219,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
         save_str(rep)
         console.print(f"       {rep.n_findings} findings")
 
-    console.print("[cyan]6/9[/cyan] Domain expert")
+    console.print("[cyan]7/10[/cyan] Domain expert")
     dom_path = get_path("processed_data") / "domain_reports" / f"{doi}.json"
     if dom_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -198,7 +228,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
         save_dom(rep)
         console.print(f"       persona={rep.persona} findings={rep.n_findings}")
 
-    console.print("[cyan]7/9[/cyan] Reproducibility")
+    console.print("[cyan]8/10[/cyan] Reproducibility")
     repro_path = get_path("processed_data") / "reproducibility_reports" / f"{doi}.json"
     if repro_path.exists():
         console.print("       [dim]cached[/dim]")
@@ -207,10 +237,10 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
         save_repro(rep)
         console.print(f"       scrutiny={rep.scrutiny_level} findings={rep.n_findings}")
 
-    console.print("[cyan]8/9[/cyan] Math aggregation")
+    console.print("[cyan]9/10[/cyan] Math aggregation")
     aggregate_and_render(doi)
 
-    console.print("[cyan]9/9[/cyan] Full referee section + triage score")
+    console.print("[cyan]10/10[/cyan] Full referee section + triage score")
     json_path, md_path = aggregate_and_render_full(doi)
 
     triage_path = get_path("processed_data") / "triage_scores" / f"{doi}.json"
@@ -259,6 +289,8 @@ def main():
     ap.add_argument("--pdf", type=Path, help="Local PDF path")
     ap.add_argument("--arxiv", type=str,
                     help="arXiv id or URL (e.g. 2401.12345)")
+    ap.add_argument("--url", type=str,
+                    help="Any HTTP(S) URL that returns a PDF (ChemRxiv, bioRxiv, medRxiv, publisher pages, personal sites).")
     ap.add_argument("--doi", type=str,
                     help="Explicit identifier (defaults to filename stem when using --pdf)")
     ap.add_argument("--check-llm", action="store_true",
