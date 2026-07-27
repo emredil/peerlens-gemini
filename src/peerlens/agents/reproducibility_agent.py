@@ -67,6 +67,53 @@ AVAILABILITY_KEYWORDS = [
     "supplementary code", "publicly available", "open-source",
 ]
 
+BIO_AVAILABILITY_KEYWORDS = [
+    "code available", "code is available", "data available",
+    "data is available", "supplementary material", "supplementary data",
+    "github.com", "zenodo", "figshare",
+    "GEO accession", "SRA accession", "ENA accession", "BioProject",
+    "PDB code", "UniProt", "ArrayExpress", "PRIDE", "MassIVE",
+    "dryad", "OSF", "protocols.io", "IRB approval", "ethics approval",
+    "IACUC", "animal protocol", "institutional review",
+    "sample size", "n =", "n=", "replicates", "biological replicate",
+    "technical replicate", "randomization", "blinding",
+]
+
+BIO_METHODOLOGY_KEYWORDS = [
+    "cell line", "primary cells", "iPSC", "stem cell", "organoid",
+    "knockout", "knockdown", "CRISPR", "Cas9", "guide RNA", "sgRNA",
+    "antibody", "clone", "catalog", "monoclonal", "polyclonal",
+    "PCR", "qPCR", "RT-PCR", "sequencing", "RNA-seq", "scRNA-seq",
+    "ChIP-seq", "ATAC-seq", "Western blot", "immunoblot",
+    "flow cytometry", "FACS", "immunofluorescence", "microscopy",
+    "confocal", "two-photon", "electrophysiology", "patch clamp",
+    "optogenetics", "chemogenetics", "DREADD",
+    "phylogenetic", "bootstrap", "posterior probability",
+    "differential expression", "GSEA", "enrichment analysis",
+]
+
+CHEM_AVAILABILITY_KEYWORDS = [
+    "supporting information", "SI", "supplementary information",
+    "characterization data", "NMR spectra", "mass spectra",
+    "crystallographic data", "CCDC deposition", "CIF file",
+    "raw spectra", "raw data", "figshare", "zenodo", "OSF",
+    "code available", "github.com",
+]
+
+CHEM_METHODOLOGY_KEYWORDS = [
+    "HPLC", "LC-MS", "GC-MS", "NMR", "1H NMR", "13C NMR",
+    "IR spectroscopy", "FTIR", "Raman", "UV-Vis", "UV-visible",
+    "XRD", "XPS", "EXAFS", "EELS", "TEM", "SEM", "HAADF-STEM",
+    "EDS", "ICP-MS", "TGA", "DSC", "BET", "DLS",
+    "cyclic voltammetry", "EIS", "impedance spectroscopy",
+    "DFT", "density functional theory", "ab initio",
+    "molecular dynamics", "MD simulation", "force field",
+    "synthesis", "purification", "column chromatography",
+    "recrystallization", "workup", "yield",
+    "characterization", "titration", "calibration curve",
+]
+
+
 ALGORITHM_KEYWORDS = [
     "monte carlo", "MCMC", "tensor network", "DMRG", "MPS",
     "matrix product", "quantum monte carlo",
@@ -78,7 +125,7 @@ ALGORITHM_KEYWORDS = [
 ]
 
 
-def _scan_signals(parsed: dict) -> dict:
+def _scan_signals(parsed: dict, field: str = "physics") -> dict:
     text_parts = [parsed.get("title", ""), parsed.get("abstract", "")]
     for s in parsed.get("sections", []):
         text_parts.append(s.get("text", ""))
@@ -94,8 +141,19 @@ def _scan_signals(parsed: dict) -> dict:
             if url not in urls:
                 urls.append(url)
 
-    availability = [kw for kw in AVAILABILITY_KEYWORDS if kw in full_text_lower]
-    algorithms = [kw for kw in ALGORITHM_KEYWORDS if kw.lower() in full_text_lower]
+    # Pick field-specific keyword lists. Physics uses the originals.
+    if field == "biology":
+        avail_list = AVAILABILITY_KEYWORDS + BIO_AVAILABILITY_KEYWORDS
+        algo_list = ALGORITHM_KEYWORDS + BIO_METHODOLOGY_KEYWORDS
+    elif field == "chemistry":
+        avail_list = AVAILABILITY_KEYWORDS + CHEM_AVAILABILITY_KEYWORDS
+        algo_list = ALGORITHM_KEYWORDS + CHEM_METHODOLOGY_KEYWORDS
+    else:
+        avail_list = AVAILABILITY_KEYWORDS
+        algo_list = ALGORITHM_KEYWORDS
+
+    availability = [kw for kw in avail_list if kw.lower() in full_text_lower]
+    algorithms = [kw for kw in algo_list if kw.lower() in full_text_lower]
 
     return {
         "code_urls": urls,
@@ -113,7 +171,7 @@ def _classification_for(doi: str) -> Optional[dict]:
     return json.loads(path.read_text())
 
 
-def _decide_gate(paper_types: list[str], signals: dict) -> tuple[str, str]:
+def _decide_gate(paper_types: list[str], signals: dict, field: str = "physics") -> tuple[str, str]:
     """Return (scrutiny_level, gate_reason).
 
     Levels:
@@ -122,6 +180,21 @@ def _decide_gate(paper_types: list[str], signals: dict) -> tuple[str, str]:
       deep   : paper_type explicitly computational / experimental /
                phenomenological, or multiple strong signals present
     """
+    # Field-conditional early routing (checked BEFORE physics-specific logic).
+    if field == "math":
+        return "none", "field=math: reproducibility axis (code/data/protocol) does not apply"
+
+    if field == "biology":
+        if any(t in ("experimental", "computational") for t in paper_types):
+            return "deep", "field=biology: experimental/computational paper needs deep scrutiny (cell lines, antibodies, replicate design, code/data deposit)"
+        return "medium", "field=biology: non-experimental paper, medium scrutiny"
+
+    if field == "chemistry":
+        if any(t in ("experimental", "computational") for t in paper_types):
+            return "deep", "field=chemistry: experimental/computational paper needs deep scrutiny (synthesis, characterization, validation detail)"
+        return "medium", "field=chemistry: non-experimental paper, medium scrutiny"
+
+    # Physics: original logic below.
     heavy = {"computational", "experimental", "phenomenological"}
     is_heavy = bool(paper_types) and any(t in heavy for t in paper_types)
 
@@ -266,10 +339,12 @@ def analyze_reproducibility(doi: str, client: Optional[GeminiClient] = None) -> 
     paper_types = (classification or {}).get("paper_types", []) or []
     report.paper_types = paper_types
 
-    signals = _scan_signals(parsed)
+    field_top = (classification or {}).get("field_top", "physics")
+
+    signals = _scan_signals(parsed, field=field_top)
     report.detected_signals = signals
 
-    scrutiny, reason = _decide_gate(paper_types, signals)
+    scrutiny, reason = _decide_gate(paper_types, signals, field=field_top)
     report.scrutiny_level = scrutiny
     report.gate_reason = reason
 

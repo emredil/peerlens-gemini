@@ -32,6 +32,13 @@ from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
 
 
+def _classification_for(doi: str) -> Optional[dict]:
+    path = get_path("processed_data") / "classifications" / f"{doi}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
 @dataclass
 class StructureFinding:
     kind: str          # "derivation_gap" | "orphan_reference"
@@ -81,7 +88,53 @@ TRIGGER_PATTERNS = [
     r"\bobvious(?:ly)?\b",
 ]
 
+BIO_TRIGGER_PATTERNS = [
+    r"\bwe hypothesi[sz]e (?:that|the)\b",
+    r"\bresults? (?:indicate|suggest|show|reveal)\b",
+    r"\b(?:this|these) (?:results?|findings?) suggest (?:that|s)\b",
+    r"\bconsistent with (?:the|a|our)\b",
+    r"\bin (?:good |excellent )?agreement with\b",
+    r"\bmay (?:play a role|contribute|reflect|indicate)\b",
+    r"\bcorrelated? with\b",
+    r"\bwe observed? (?:that|a|an)\b",
+    r"\bappears? to\b",
+    r"\blikely (?:reflects?|involves?|contributes?)\b",
+    r"\bcannot (?:rule out|exclude)\b",
+    r"\bfurther (?:studies|work|experiments) (?:are|will be) (?:needed|required)\b",
+]
+
+CHEM_TRIGGER_PATTERNS = [
+    r"\bconfirmed by\b",
+    r"\bas expected\b",
+    r"\bsuccessfully (?:synthesi[sz]ed|demonstrated|prepared|obtained)\b",
+    r"\bindicat(?:es|ing) the (?:presence|formation) of\b",
+    r"\battributed to\b",
+    r"\bthe enhanced (?:performance|activity|selectivity|stability)\b",
+    r"\bin (?:excellent|good) agreement with\b",
+    r"\bconsistent with (?:literature|previous|the)\b",
+    r"\bsuggests? the (?:formation|presence) of\b",
+    r"\bwe (?:propose|hypothesi[sz]e) (?:that|the)\b",
+    r"\bstructure (?:was|is) confirmed\b",
+    r"\bcan be (?:attributed|assigned) to\b",
+]
+
+MATH_TRIGGER_PATTERNS = [
+    r"\bone (?:easily|readily) (?:sees|verifies|checks)\b",
+    r"\ban argument (?:shows|gives)\b",
+    r"\bsimilar to (?:the proof|the argument) of\b",
+    r"\bwithout loss of generality\b",
+    r"\bWLOG\b",
+    r"\bit suffices to (?:show|verify|check|prove)\b",
+    r"\bby (?:a standard|the same) argument\b",
+    r"\bmutatis mutandis\b",
+    r"\banalogous(?:ly)?\b",
+    r"\bthe proof (?:is|will be) (?:similar|analogous)\b",
+]
+
 _COMPILED = [re.compile(p, re.IGNORECASE) for p in TRIGGER_PATTERNS]
+_COMPILED_BIO = [re.compile(p, re.IGNORECASE) for p in BIO_TRIGGER_PATTERNS]
+_COMPILED_CHEM = [re.compile(p, re.IGNORECASE) for p in CHEM_TRIGGER_PATTERNS]
+_COMPILED_MATH = [re.compile(p, re.IGNORECASE) for p in MATH_TRIGGER_PATTERNS]
 
 
 @dataclass
@@ -93,15 +146,24 @@ class Candidate:
     offset: int   # position in section text
 
 
-def scan_sections(parsed: dict) -> list[Candidate]:
+def scan_sections(parsed: dict, field: str = "physics") -> list[Candidate]:
     """Walk every section and pull trigger phrases with local context."""
     out: list[Candidate] = []
+    if field == "biology":
+        patterns = _COMPILED + _COMPILED_BIO
+    elif field == "chemistry":
+        patterns = _COMPILED + _COMPILED_CHEM
+    elif field == "math":
+        patterns = _COMPILED + _COMPILED_MATH
+    else:
+        patterns = _COMPILED
+
     for s in parsed.get("sections", []):
         text = s.get("text", "") or ""
         if len(text) < 100:
             continue
         seen_offsets: set[int] = set()
-        for pat in _COMPILED:
+        for pat in patterns:
             for m in pat.finditer(text):
                 start = max(0, m.start() - 200)
                 end = min(len(text), m.end() + 200)
@@ -246,7 +308,9 @@ def analyze_structure(doi: str, client: Optional[GeminiClient] = None) -> Struct
         return report
     parsed = json.loads(parsed_path.read_text())
 
-    candidates = scan_sections(parsed)
+    classification = _classification_for(doi)
+    field_top = (classification or {}).get("field_top", "physics")
+    candidates = scan_sections(parsed, field=field_top)
     report.n_candidates_scanned = len(candidates)
 
     if not candidates:

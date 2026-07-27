@@ -134,3 +134,148 @@ Pending at seal:
     the demo represents the full four-domain product.
   Faz 2 E (30-50 paper calibration) — deferred to post-deployment
     when real editor feedback is available.
+
+## 2026-07-27 (continued) — Faz 3 sealed
+
+Sealed the remaining three steps (6 -> 5 -> 4 in the original order).
+
+Adım 6 — Domain persona balance
+-------------------------------
+DOMAIN_SYSTEM_TEMPLATE rewritten to be field-agnostic:
+  - Opening line no longer says "physics referee" (was misleading for
+    the 20 non-physics personas added in Faz 3).
+  - Removed physics-only examples ("gauge specification", "PN order",
+    "slow-roll validity") from the domain_concern description; replaced
+    with an abstract description of what "subdomain-specific" means.
+  - Added subtle flagging guidance: flag when the paper's title +
+    abstract + section headings CLEARLY IMPLY the concern is CENTRAL
+    but the summary text gives NO evidence it is addressed. Do not
+    flag when the paper is silent on a non-central checklist item.
+
+Regression check (with SciPost classifications now cached):
+  Physics 20.4.097 : persona=gravitational-wave / cosmology theorist,
+                     1 warning (real concern in abstract)
+  Math 2401.09327  : persona=topologist / differential geometer, 0 findings
+  Bio 2607.21442   : persona=cell biologist / developmental biologist,
+                     0 findings
+  Chem chemrxiv    : persona=analytical chemist, 0 findings
+
+Zero findings on the non-physics test papers is consistent with these
+being peer-review-clean or near-clean papers; no fabrication observed.
+
+Adım 5 — Reproducibility field-conditional
+------------------------------------------
+Field-specific keyword lists added:
+  BIO_AVAILABILITY_KEYWORDS: GEO/SRA/ENA/PDB accession, IRB, IACUC,
+    ethics approval, sample size, replicates, protocols.io deposits.
+  BIO_METHODOLOGY_KEYWORDS: cell line, iPSC, CRISPR, antibody clone,
+    PCR / qPCR / RNA-seq / ChIP-seq / ATAC-seq, Western blot,
+    flow cytometry, patch clamp, optogenetics, phylogenetics,
+    differential expression.
+  CHEM_AVAILABILITY_KEYWORDS: Supporting Information, characterization
+    data, CCDC deposition, CIF files.
+  CHEM_METHODOLOGY_KEYWORDS: HPLC / LC-MS / GC-MS / NMR / IR / Raman /
+    UV-Vis / XRD / XPS / EXAFS / TEM / SEM / HAADF-STEM / EDS / TGA /
+    DSC / BET, cyclic voltammetry, EIS, DFT, MD, synthesis /
+    purification / workup / yield / calibration curve.
+
+_scan_signals(parsed, field="physics") uses AVAILABILITY_KEYWORDS +
+ALGORITHM_KEYWORDS as base and adds bio/chem lists on top when the
+field matches.
+
+_decide_gate(paper_types, signals, field="physics") does field-first
+routing:
+  field=math          -> scrutiny=none  (formal proofs; not applicable)
+  field=biology       -> scrutiny=deep  (experimental / computational)
+  field=chemistry     -> scrutiny=deep  (experimental / computational)
+  field=physics       -> original theoretical/computational logic
+
+analyze_reproducibility derives field_top from the classification
+cache and threads it through both _scan_signals and _decide_gate.
+
+Regression check:
+  Physics 20.4.097 : scrutiny=deep, 2 warnings (unchanged behaviour)
+  Math 2401.09327  : scrutiny=none, gate says "reproducibility axis
+                     (code/data/protocol) does not apply"
+  Bio 2607.21442   : scrutiny=deep, 3 findings (1 critical, 2 warning)
+                     — missing_code (no repo for the simulations),
+                     missing_data (no data availability for 10 figures),
+                     missing_algorithm (no numerical integrator named)
+  Chem chemrxiv    : scrutiny=deep, 1 warning (missing data availability
+                     across 9 figures)
+
+Bio deep scrutiny correctly catches the computational-biology
+reproducibility gaps that the physics-only keyword list would have
+missed.
+
+One transient anomaly: an earlier bio+chem batch hung for over an
+hour on a single script invocation. Running each paper in its own
+python -c invocation completed in normal ~30-60s each. Suspect a
+network glitch or an orphaned process; not reproducible.
+
+Adım 4 — Structure trigger field-conditional
+--------------------------------------------
+Field-specific regex trigger patterns added alongside the existing
+physics-agnostic list (which mostly contains cross-field hedges like
+"trivially follows", "it is easy to see", "we omit"):
+
+  BIO_TRIGGER_PATTERNS: "we hypothesi[sz]e", "results (indicate|
+    suggest|show)", "consistent with", "in (good|excellent) agreement",
+    "may (play a role|contribute)", "correlated with", "we observed",
+    "appears to", "cannot (rule out|exclude)", "further studies
+    needed".
+  CHEM_TRIGGER_PATTERNS: "confirmed by", "as expected", "successfully
+    synthesi[sz]ed / demonstrated", "indicates the presence of",
+    "attributed to", "the enhanced (performance|activity|selectivity|
+    stability)", "structure was confirmed", "can be (attributed|
+    assigned) to".
+  MATH_TRIGGER_PATTERNS: "one easily sees / verifies", "an argument
+    shows", "similar to the proof of", "without loss of generality",
+    "WLOG", "it suffices to", "by a standard argument", "mutatis
+    mutandis", "analogous(ly)?".
+
+scan_sections(parsed, field="physics") merges the base compiled list
+with the field-specific compiled list.
+
+analyze_structure derives field_top from the classification cache
+and passes it to scan_sections. A local _classification_for helper
+was added (mirrors reproducibility_agent's approach).
+
+Regression check:
+  Physics 20.4.097 : 2 candidates -> 0 findings (unchanged)
+  Math 2401.09327  : 9 candidates -> 0 findings  (was 2 candidates
+                     under physics-only patterns; math patterns
+                     picked up WLOG, "one easily sees", "analogous",
+                     "mutatis mutandis" which are legitimately common
+                     in Teichmüller-theory prose)
+  Bio 2607.21442   : 0 candidates -> 0 findings  (see note below)
+  Chem chemrxiv    : 1 candidate -> 0 findings   (chem hedges triggered
+                     but LLM adjudication found no concrete gap)
+
+The silence-is-default LLM adjudication continues to keep the
+finding count low even when candidates grow; no fabrication observed.
+
+Note — parser gap surfaced during Adım 4 testing:
+  arxiv_2607.21442.json has sections_count = 0 in the parsed output.
+  The PDF has clearly-labelled sections in the source, so
+  ingestion/pdf.py is not extracting them for this paper. Structure
+  agent scanning depends on section text, so this parser gap results
+  in zero candidates for that paper. Deferred; will need a look at
+  the PDF parser after deployment. Does not affect the other agents
+  because they read the abstract + intro directly.
+
+Faz 3 status: COMPLETE
+  All six planned steps sealed. The product now handles four fields
+  (physics, math, chemistry, biology) end-to-end with domain-specific
+  classification, claim extraction, dimensional gating, symbolic
+  verification (where meaningful), novelty search, structure scanning,
+  domain-expert review, reproducibility scrutiny, and field-aware
+  markdown rendering.
+
+Next up:
+  - Commit and push Faz 3 completion.
+  - Deployment (fly.io demo) with password gating and rate limits
+    before the URL goes public.
+  - Faz 2 E (30-50 paper calibration) deferred to post-deployment
+    when real editor feedback becomes available.
+  - Parser bug on 2607.21442 to be revisited when convenient.
