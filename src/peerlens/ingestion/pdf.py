@@ -84,7 +84,7 @@ def _guess_title(doc: fitz.Document) -> str:
 
 def _extract_abstract(full_text: str) -> str:
     m = re.search(
-        r"\bAbstract\b\s*[\.\-:]?\s*\n?(.+?)(?=\n\s*(?:Contents|1\s+Introduction|\bIntroduction\b|\bCopyright\b))",
+        r"\bAbstract\b\s*[\.\-:]?\s*\n?(.+?)(?=\n\s*(?:Contents|\d+\.?\s+Introduction|\bIntroduction\b|\bKeywords\b|\bCopyright\b))",
         full_text,
         re.DOTALL | re.IGNORECASE,
     )
