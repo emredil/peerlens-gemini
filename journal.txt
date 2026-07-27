@@ -279,3 +279,64 @@ Next up:
   - Faz 2 E (30-50 paper calibration) deferred to post-deployment
     when real editor feedback becomes available.
   - Parser bug on 2607.21442 to be revisited when convenient.
+
+## 2026-07-27 (continued) — cross-domain validation + parser fix
+
+Ran three new papers through the pipeline (one per new field) to check
+end-to-end quality:
+  math   2607.03500v1  (Nguyen, Standard Veronese degree, Proc. AMS)
+  chem   chemrxiv.15006606 (Tempol / TMOS SolGel entrapment)
+  bio    2607.22505v1  (Loom, spatial transcriptomics viz, cs.GR + bio)
+
+Classifier: three-for-three correct field routing.
+  math_algebra          (Proc. AMS paper in commutative algebra)
+  chem_physical         (spectroscopy + kinetics preprint)
+  bio_bioinformatics_systems  (visualization tool for spatial
+    transcriptomics; bio-precedence rule fired correctly on a paper
+    submitted to cs.GR whose central object is a bio analysis system)
+
+Personas assigned by domain expert:
+  algebraist                          (math)
+  physical chemist / spectroscopist   (chem)
+  bioinformatician / systems biologist (bio)
+
+Claim extraction results:
+  math: 0 claims initially (parser bug on abstract), 3 claims after
+        parser fix
+  chem: 5 claims + 5 symbols
+  bio:  10 claims + 7 symbols
+
+Parser fix
+----------
+_extract_abstract regex terminated on '1 Introduction' (whitespace,
+no period). Math preprints use '1. Introduction' (with period). The
+lookahead was rewritten to accept both, plus multi-digit section
+numbers and a 'Keywords' fallback stopper. Test-set regression check
+confirmed no other paper's abstract changed length.
+
+Effect on math 2607.03500v1: abstract_len 0 -> 302, claim extraction
+0 -> 3 (Theorem A, Counter-example, and a supporting statement).
+
+Known parser gaps at this seal (deferred to post-deployment)
+------------------------------------------------------------
+- sections=0 on math + bio papers with non-standard heading layouts
+  (2607.03500v1, arxiv_2607.21442). Downstream agents fall back to
+  abstract + intro text so the pipeline still runs.
+- refs=0 on the Loom visualization paper (2607.22505v1). Novelty
+  agent still retrieved 8 related works from external sources so
+  the impact is limited.
+
+Score discrimination observation
+--------------------------------
+All three test papers scored 92-100/PRIORITY. This is not fabrication
+(each agent explicitly returned zero findings when it had nothing
+concrete to raise), but it is not yet discriminative either. A weak
+preprint and a strong Proc. AMS paper receive similar top-tier
+verdicts. Improving discrimination requires either (a) letting the
+domain expert push harder on borderline cases, or (b) adding a
+coverage-penalty for papers whose parsed content is sparse. Both are
+options to consider after collecting real editor feedback in
+deployment.
+
+Faz 3 fully sealed. Next: deployment (Seçenek B / Faz A of the
+original roadmap) — fly.io demo with password gate and rate limits.
