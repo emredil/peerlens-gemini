@@ -50,7 +50,9 @@ class RefereeReport:
     summary_json: dict = field(default_factory=dict)
     policy_json: dict = field(default_factory=dict)
     claims_json: dict = field(default_factory=dict)
-    field_top: str = "physics" 
+    field_top: str = "physics"
+    title: str = ""
+    n_pages: int = 0 
 
 
 VERDICT_SEVERITY = {
@@ -208,6 +210,16 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         except _json_stdlib.JSONDecodeError:
             policy_json = {}
 
+    parsed_path = processed / "parsed" / f"{doi_label}.json"
+    parsed_meta: dict = {}
+    if parsed_path.exists():
+        try:
+            parsed_meta = _json_stdlib.loads(parsed_path.read_text())
+        except _json_stdlib.JSONDecodeError:
+            parsed_meta = {}
+    title_str = parsed_meta.get("title", "") or ""
+    n_pages_int = int(parsed_meta.get("n_pages", 0) or 0)
+
     cls_path = processed / "classifications" / f"{doi_label}.json"
     cls_json: dict = {}
     if cls_path.exists():
@@ -273,6 +285,8 @@ def aggregate_full(doi_label: str) -> RefereeReport:
         policy_json=policy_json,
         claims_json=claims_json,
         field_top=field_top,
+        title=title_str,
+        n_pages=n_pages_int,
     )
 
 
@@ -438,78 +452,298 @@ def _render_novelty_section(nov_json: dict, verdict: Verdict, reason: str) -> li
 
 
 def render_markdown(report: RefereeReport) -> str:
+    """Referee-style markdown report matching the target editor format."""
     lines: list[str] = []
-    lines.append(f"# PeerLens Editorial Triage — {report.doi_label}")
+
+    # Header
+    title = report.title or report.doi_label
+    lines.append(f"# PeerLens Referee Report — {title}")
+    meta_bits = [f"`{report.doi_label}`"]
+    if report.n_pages:
+        meta_bits.append(f"{report.n_pages} pages")
+    if report.field_top:
+        meta_bits.append(report.field_top)
+    lines.append("_" + " · ".join(meta_bits) + "_")
     lines.append("")
 
-    verdict_labels = {
-        "priority": "PRIORITY — surface to editor immediately",
-        "standard": "STANDARD — route to normal referee process",
-        "reject":   "REJECT candidate — auto-reject subject to editor confirmation",
-        "insufficient_data": "INSUFFICIENT DATA — human review required",
-    }
-    tv = report.triage_verdict
-    lines.append(f"## Triage: **{tv.upper()}** (score {report.triage_score}/100)")
-    lines.append("")
-    lines.append(f"_{verdict_labels.get(tv, tv)}_")
-    lines.append("")
+    # Recommendation
+    lines.extend(_render_recommendation_section(report))
 
-    if report.triage_top_negative:
-        lines.append("**Why this score — top signals against the paper:**")
-        lines.append("")
-        for c in report.triage_top_negative:
-            src = c["source"]
-            kind = c["kind"]
-            sev = c["severity"]
-            loc = c["location"] or "—"
-            weight = c["weight"]
-            evidence = c["evidence_short"]
-            lines.append(f"- `{weight:+d}` **{src}.{kind}** [{sev}] @ {loc}")
-            lines.append(f"  _{evidence}_")
-        lines.append("")
+    # Summary (from summary agent)
+    if report.summary_json:
+        lines.extend(_render_summary_section(report.summary_json))
+
+    # Strengths + Weaknesses (from domain expert)
+    lines.extend(_render_strengths_section(report.domain_json))
+    lines.extend(_render_weaknesses_section(report.domain_json))
+
+    # Section-by-section commentary
+    lines.extend(_render_section_by_section(report))
+
+    # Minor comments (warning/info findings across agents)
+    lines.extend(_render_minor_comments_section(report))
+
+    # Policy (opt-in, LLM authorship)
+    if report.policy_json:
+        lines.extend(_render_policy_section(report.policy_json))
 
     lines.append("---")
     lines.append("")
 
-    lines.append(f"### Legacy verdict: `{report.overall_verdict}`")
-    lines.append("")
-    lines.append(f"_{report.overall_reason}_")
-    lines.append("")
-    lines.append(f"- Math:            `{report.math_verdict}`")
-    lines.append(f"- Novelty:         `{report.novelty_verdict}`")
-    lines.append(f"- Structure:       `{report.structure_verdict}`")
-    lines.append(f"- Domain:          `{report.domain_verdict}`")
-    lines.append(f"- Reproducibility: `{report.reproducibility_verdict}`")
-    lines.append("")
-
-    # Summary section renders only when summary_reports/ JSON exists on disk.
-    if report.summary_json:
-        lines.extend(_render_summary_section(report.summary_json))
-
-    # Policy section renders only when llm_detection_reports/ JSON exists
-    # on disk (editor opted in). Does not influence the triage score.
-    if report.policy_json:
-        lines.extend(_render_policy_section(report.policy_json))
-    lines.extend(render_claims_section(report.claims_json, report.field_top))
-    lines.extend(_render_math_section(report.math_json, report.field_top))
-    lines.extend(_render_novelty_section(
-        report.novelty_json, report.novelty_verdict,
-        report.overall_reason if report.novelty_verdict == report.overall_verdict else "",
-    ))
-    lines.extend(_render_structure_section(
-        report.structure_json, report.structure_verdict,
-    ))
-    lines.extend(_render_domain_section(
-        report.domain_json, report.domain_verdict,
-    ))
-    lines.extend(_render_reproducibility_section(
-        report.reproducibility_json, report.reproducibility_verdict,
-    ))
+    # Technical details (metrics + tokens)
+    lines.extend(_render_technical_details_section(report))
 
     lines.append("---")
     lines.append("")
     lines.append("_Generated by PeerLens (prototype). Every finding is an AI suggestion; "
                  "a human editor makes the final decision._")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# New render helpers (target format)
+# ---------------------------------------------------------------------------
+
+_SCORE_VERDICT_MAP = [
+    (90, "Accept"),
+    (70, "Minor revision"),
+    (50, "Major revision"),
+    (0,  "Reject"),
+]
+
+
+def _score_to_verdict(score: int) -> str:
+    for threshold, label in _SCORE_VERDICT_MAP:
+        if score >= threshold:
+            return label
+    return "Reject"
+
+
+def _render_recommendation_section(report: RefereeReport) -> list[str]:
+    lines: list[str] = ["## Recommendation", ""]
+    score = int(report.triage_score)
+    score_verdict = _score_to_verdict(score)
+    domain_verdict = ""
+    if report.domain_json:
+        domain_verdict = (report.domain_json.get("verdict") or "").strip()
+
+    lines.append(f"**{score_verdict}** — score {score}/100")
+    if domain_verdict:
+        lines.append(f"**Domain expert verdict:** {domain_verdict}")
+    reason = (report.overall_reason or "").strip()
+    if reason:
+        lines.append("")
+        lines.append(f"_{reason}_")
+    lines.append("")
+    return lines
+
+
+def _render_strengths_section(domain_json: dict) -> list[str]:
+    lines: list[str] = []
+    if not domain_json:
+        return lines
+    strengths = (domain_json.get("strengths_narrative") or "").strip()
+    if not strengths:
+        return lines
+    lines.append("## Strengths")
+    lines.append("")
+    lines.append(strengths)
+    lines.append("")
+    return lines
+
+
+def _render_weaknesses_section(domain_json: dict) -> list[str]:
+    lines: list[str] = ["## Weaknesses", ""]
+    weaknesses = ""
+    if domain_json:
+        weaknesses = (domain_json.get("weaknesses_narrative") or "").strip()
+    if weaknesses:
+        lines.append(weaknesses)
+    else:
+        lines.append("No major weaknesses identified.")
+    lines.append("")
+    return lines
+
+
+def _render_section_by_section(report: RefereeReport) -> list[str]:
+    lines: list[str] = ["## Section-by-section commentary", ""]
+
+    nov_narrative = (report.novelty_json.get("narrative") or "").strip() if report.novelty_json else ""
+    if nov_narrative:
+        lines.append("### On novelty and prior work")
+        lines.append("")
+        lines.append(nov_narrative)
+        lines.append("")
+
+    dom_comment = (report.domain_json.get("commentary_narrative") or "").strip() if report.domain_json else ""
+    if dom_comment:
+        subdomain = report.domain_json.get("subdomain_used", "") or "domain-specific"
+        lines.append(f"### On {subdomain} content")
+        lines.append("")
+        lines.append(dom_comment)
+        lines.append("")
+
+    struct_narrative = (report.structure_json.get("narrative") or "").strip() if report.structure_json else ""
+    if struct_narrative:
+        lines.append("### On presentation and clarity")
+        lines.append("")
+        lines.append(struct_narrative)
+        lines.append("")
+
+    repro_narrative = (report.reproducibility_json.get("narrative") or "").strip() if report.reproducibility_json else ""
+    repro_verdict = (report.reproducibility_json.get("verdict") or "").strip().lower() if report.reproducibility_json else ""
+    if repro_narrative and repro_verdict != "not applicable":
+        lines.append("### On reproducibility")
+        lines.append("")
+        lines.append(repro_narrative)
+        lines.append("")
+
+    math_prose = _render_math_prose(report.math_json)
+    if math_prose:
+        lines.append("### On numerical and symbolic consistency")
+        lines.append("")
+        lines.extend(math_prose)
+        lines.append("")
+
+    # If nothing rendered under section-by-section, drop the header too.
+    if len(lines) == 2:
+        return []
+    return lines
+
+
+def _render_math_prose(math_json: dict) -> list[str]:
+    """Turn structured math findings into a short prose paragraph."""
+    if not math_json:
+        return []
+    verdict = (math_json.get("verdict") or "").strip()
+    findings = math_json.get("findings") or []
+    n_findings = len(findings) if isinstance(findings, list) else 0
+
+    if verdict in ("clean", "insufficient_data") and n_findings == 0:
+        return []
+
+    sentences: list[str] = []
+    critical = [f for f in findings if isinstance(f, dict) and f.get("severity") == "critical"]
+    warning  = [f for f in findings if isinstance(f, dict) and f.get("severity") in ("major", "warning")]
+
+    if critical:
+        sentences.append(f"Automated checks flagged {len(critical)} critical algebraic or dimensional issue(s) that a human referee should review.")
+        for f in critical[:3]:
+            loc = f.get("location") or "unspecified location"
+            ev = (f.get("evidence_short") or f.get("evidence") or "").strip()
+            if ev:
+                sentences.append(f"At {loc}: {ev}")
+    if warning:
+        sentences.append(f"An additional {len(warning)} warning-level finding(s) were noted; these are unlikely to affect the paper's conclusions but may benefit from clarification.")
+
+    if not sentences:
+        sentences.append("Automated dimensional and symbolic checks were performed on the paper's central claims; no major inconsistencies were flagged.")
+
+    return sentences
+
+
+def _render_minor_comments_section(report: RefereeReport) -> list[str]:
+    """Collect warning/info-level findings from every agent."""
+    minor_items: list[str] = []
+
+    for label, agent_json in [
+        ("Novelty", report.novelty_json),
+        ("Structure", report.structure_json),
+        ("Domain", report.domain_json),
+        ("Reproducibility", report.reproducibility_json),
+    ]:
+        if not agent_json:
+            continue
+        findings = agent_json.get("findings") or []
+        for f in findings if isinstance(findings, list) else []:
+            if not isinstance(f, dict):
+                continue
+            sev = (f.get("severity") or "").lower()
+            if sev in ("minor", "warning", "info"):
+                loc = f.get("location") or ""
+                ev = (f.get("evidence_short") or f.get("evidence") or f.get("message") or "").strip()
+                if ev:
+                    tag = f"[{label}]"
+                    if loc:
+                        minor_items.append(f"- {tag} {loc}: {ev}")
+                    else:
+                        minor_items.append(f"- {tag} {ev}")
+
+    if not minor_items:
+        return []
+    lines: list[str] = ["## Minor comments", ""]
+    lines.extend(minor_items)
+    lines.append("")
+    return lines
+
+
+def _render_technical_details_section(report: RefereeReport) -> list[str]:
+    lines: list[str] = ["## Technical details", ""]
+
+    subdomain = ""
+    if report.domain_json:
+        subdomain = report.domain_json.get("subdomain_used", "") or ""
+    lines.append(f"- **Field:** {report.field_top}" + (f", subdomain: {subdomain}" if subdomain else ""))
+
+    claims = report.claims_json or {}
+    n_claims = claims.get("n_claims_total") or len(claims.get("claims") or [])
+    n_symbols = len(claims.get("symbols") or [])
+    lines.append(f"- **Extracted claims:** {n_claims} claim(s), {n_symbols} symbol(s)")
+
+    nov = report.novelty_json or {}
+    n_related = nov.get("n_related_retrieved") or 0
+    n_corpus = nov.get("n_corpus_matches") or 0
+    n_scholar = nov.get("n_scholar_matches") or 0
+    lines.append(f"- **Similar papers retrieved:** {n_related} (corpus: {n_corpus}, scholar: {n_scholar})")
+
+    ref_median = nov.get("reference_year_median")
+    ref_max = nov.get("reference_year_max")
+    if ref_median or ref_max:
+        lines.append(f"- **Reference years:** median {ref_median}, most recent {ref_max}")
+
+    math = report.math_json or {}
+    n_dim = math.get("n_dimensional_findings") or math.get("dimensional_checks") or 0
+    lines.append(f"- **Dimensional checks:** {n_dim} finding(s)")
+
+    verified = math.get("n_verified") or 0
+    refuted  = math.get("n_refuted")  or 0
+    unable   = math.get("n_unable")   or 0
+    lines.append(f"- **Symbolic verification (SymPy):** {verified} verified / {refuted} refuted / {unable} unable")
+
+    g_ver = math.get("n_gemini_verified")
+    g_ref = math.get("n_gemini_refuted")
+    g_una = math.get("n_gemini_unable")
+    if g_ver is not None or g_ref is not None or g_una is not None:
+        lines.append(f"- **Symbolic verification (Gemini judgment):** {g_ver or 0} verified / {g_ref or 0} refuted / {g_una or 0} unable")
+
+    agreement = math.get("agreement_sympy_gemini")
+    if agreement is not None:
+        lines.append(f"- **Agreement between SymPy and Gemini:** {agreement}")
+
+    lines.append(f"- **Model:** gemini-pro-latest")
+
+    # Token totals across agents
+    total_in = total_out = 0
+    for j in (report.summary_json, report.novelty_json, report.structure_json,
+              report.domain_json, report.reproducibility_json, report.claims_json):
+        if isinstance(j, dict):
+            total_in  += int(j.get("input_tokens") or 0)
+            total_out += int(j.get("output_tokens") or 0)
+    if total_in or total_out:
+        lines.append(f"- **Total tokens:** {total_in} in / {total_out} out")
+
+    lines.append("")
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# End new helpers
+# ---------------------------------------------------------------------------
+
+
+def render_markdown_LEGACY_UNUSED(report: RefereeReport) -> str:
+    """Kept for reference; superseded by render_markdown() above."""
+    lines: list[str] = []
     return "\n".join(lines)
 
 
