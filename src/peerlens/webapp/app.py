@@ -44,6 +44,15 @@ from peerlens.ingestion.arxiv import (
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB per upload
+app.config["SECRET_KEY"] = __import__("os").environ.get(
+    "PEERLENS_SECRET_KEY",
+    __import__("secrets").token_hex(32),
+)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+from peerlens.webapp.auth import requires_auth, rate_limited, register_auth_routes
+register_auth_routes(app)
 
 
 # ---------------------------------------------------------------------------
@@ -325,11 +334,14 @@ REPORT_TEMPLATE = r"""
 # ---------------------------------------------------------------------------
 
 @app.route("/")
+@requires_auth
 def index():
     return render_template_string(INDEX_TEMPLATE)
 
 
 @app.route("/upload", methods=["POST"])
+@requires_auth
+@rate_limited
 def upload():
     """Handle PDF or arXiv submissions."""
     arxiv_field = (request.form.get("arxiv") or "").strip()
@@ -381,6 +393,7 @@ def upload():
 
 
 @app.route("/jobs")
+@requires_auth
 def list_jobs():
     with _JOBS_LOCK:
         jobs = sorted(JOBS.values(), key=lambda j: -j.created_at)[:30]
@@ -388,6 +401,7 @@ def list_jobs():
 
 
 @app.route("/status/<job_id>")
+@requires_auth
 def job_status(job_id):
     with _JOBS_LOCK:
         job = JOBS.get(job_id)
@@ -397,6 +411,7 @@ def job_status(job_id):
 
 
 @app.route("/dashboard-static")
+@requires_auth
 def dashboard_static():
     """Rebuild and serve the editorial dashboard HTML."""
     dash_script = _ROOT / "scripts" / "build_editorial_dashboard.py"
@@ -414,6 +429,7 @@ def dashboard_static():
 
 
 @app.route("/report/<doi>")
+@requires_auth
 def report(doi):
     md_path = get_path("processed_data") / "referee_sections" / f"{doi}_full.md"
     if not md_path.exists():
@@ -424,6 +440,7 @@ def report(doi):
 # The dashboard HTML contains links like "referee_sections/xxx_full.md"
 # so we need to serve that directory as static.
 @app.route("/referee_sections/<path:filename>")
+@requires_auth
 def serve_report_file(filename):
     directory = get_path("processed_data") / "referee_sections"
     return send_from_directory(str(directory), filename)

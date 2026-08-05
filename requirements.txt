@@ -1,0 +1,12 @@
+flask>=3.0
+google-genai
+pymupdf
+requests
+rich
+pyyaml
+sympy
+python-dotenv
+chromadb
+sentence-transformers
+beautifulsoup4
+lxml
