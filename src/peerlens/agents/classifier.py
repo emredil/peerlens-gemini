@@ -1,6 +1,8 @@
 """Classifier agent — multi-field (physics / math / chem / bio) subdomain + paper type."""
 from __future__ import annotations
 
+from typing import Any
+
 import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -209,7 +211,7 @@ def _build_user_prompt(parsed_paper: dict, few_shots: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def classify_paper(parsed_paper: dict, client: GeminiClient | None = None) -> ClassificationResult:
+def classify_paper(parsed_paper: dict, client: GeminiClient | None = None, uploaded_file: Any = None) -> ClassificationResult:
     global _FEW_SHOT_CACHE
     if _FEW_SHOT_CACHE is None:
         _FEW_SHOT_CACHE = _load_few_shot_examples()

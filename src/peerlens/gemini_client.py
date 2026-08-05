@@ -161,6 +161,7 @@ class GeminiClient:
         retries: int = 3,
         retry_sleep: float = 2.0,
         fallback_models: Optional[list[str]] = None,
+        uploaded_file: Any = None,
     ) -> StructuredResult:
         """Call a Gemini model with a forced structured JSON output.
 
@@ -171,6 +172,14 @@ class GeminiClient:
         """
         # Build parts
         parts: list[Any] = []
+        if uploaded_file is not None:
+            file_uri = getattr(uploaded_file, "uri", None) or getattr(uploaded_file, "name", None)
+            if file_uri is None:
+                raise ValueError("uploaded_file has no uri or name attribute")
+            parts.append(types.Part.from_uri(
+                file_uri=file_uri,
+                mime_type="application/pdf",
+            ))
         if images:
             for img in images:
                 parts.append(types.Part.from_bytes(mime_type=img["mime"], data=img["data"]))
@@ -226,6 +235,7 @@ class GeminiClient:
                     fallback = self._json_schema_fallback(
                         candidate, system, user, images, tool_input_schema,
                         max_output_tokens, temperature,
+                        uploaded_file=uploaded_file,
                     )
                     return fallback
 
@@ -272,9 +282,18 @@ class GeminiClient:
         schema: dict,
         max_output_tokens: int,
         temperature: float,
+        uploaded_file: Any = None,
     ) -> StructuredResult:
         """Ask the model to emit JSON directly, matching the schema."""
         parts: list[Any] = []
+        if uploaded_file is not None:
+            file_uri = getattr(uploaded_file, "uri", None) or getattr(uploaded_file, "name", None)
+            if file_uri is None:
+                raise ValueError("uploaded_file has no uri or name attribute")
+            parts.append(types.Part.from_uri(
+                file_uri=file_uri,
+                mime_type="application/pdf",
+            ))
         if images:
             for img in images:
                 parts.append(types.Part.from_bytes(mime_type=img["mime"], data=img["data"]))
@@ -328,16 +347,37 @@ class GeminiClient:
         user: str,
         max_output_tokens: int = 2048,
         temperature: float = 0.2,
+        pdf_bytes: Optional[bytes] = None,
+        uploaded_file: Any = None,
     ) -> tuple[str, int, int]:
-        """Return (text, input_tokens, output_tokens) for simple prompts."""
+        """Return (text, input_tokens, output_tokens) for simple prompts.
+
+        If pdf_bytes is given, the PDF is inlined into the request as a
+        Part, alongside the user text. Gemini reads the PDF natively.
+        """
         config = types.GenerateContentConfig(
             system_instruction=system,
             temperature=temperature,
             max_output_tokens=max_output_tokens,
         )
+        parts: list = []
+        if uploaded_file is not None:
+            file_uri = getattr(uploaded_file, "uri", None) or getattr(uploaded_file, "name", None)
+            if file_uri is None:
+                raise ValueError("uploaded_file has no uri or name attribute")
+            parts.append(types.Part.from_uri(
+                file_uri=file_uri,
+                mime_type="application/pdf",
+            ))
+        elif pdf_bytes is not None:
+            parts.append(types.Part.from_bytes(
+                mime_type="application/pdf",
+                data=pdf_bytes,
+            ))
+        parts.append(types.Part(text=user))
         resp = self._client.models.generate_content(
             model=model,
-            contents=[types.Content(role="user", parts=[types.Part(text=user)])],
+            contents=[types.Content(role="user", parts=parts)],
             config=config,
         )
         text = ""
@@ -354,3 +394,34 @@ class GeminiClient:
             getattr(usage, "prompt_token_count", 0) if usage else 0,
             getattr(usage, "candidates_token_count", 0) if usage else 0,
         )
+
+    def upload_pdf(self, pdf_path: Path, display_name: Optional[str] = None) -> Any:
+        """Upload a PDF to Gemini's File API for reuse across multiple agents.
+
+        Returns a File object with .uri and .name attributes. Cached for
+        48 hours on Google's side. Pass the returned object to plain_text
+        via the uploaded_file parameter to reference the cached PDF
+        without re-uploading.
+        """
+        config = None
+        if display_name is not None:
+            config = types.UploadFileConfig(
+                mime_type="application/pdf",
+                display_name=display_name,
+            )
+        else:
+            config = types.UploadFileConfig(mime_type="application/pdf")
+        return self._client.files.upload(file=str(pdf_path), config=config)
+
+    def delete_pdf(self, uploaded_file: Any) -> None:
+        """Delete an uploaded PDF from Gemini's File API.
+
+        Safe cleanup after all agents that need the PDF have finished.
+        Silently ignores errors (Gemini may auto-expire the file first).
+        """
+        try:
+            name = getattr(uploaded_file, "name", None)
+            if name:
+                self._client.files.delete(name=name)
+        except Exception:
+            pass

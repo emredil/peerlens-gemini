@@ -9,7 +9,7 @@ import json
 import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
@@ -48,6 +48,8 @@ class NoveltyFinding:
 @dataclass
 class NoveltyReport:
     doi_label: str
+    narrative: str = ""
+    verdict: str = ""  # "clearly novel" | "incremental" | "overlaps with prior work" 
     n_related_retrieved: int = 0
     n_scholar_matches: int = 0
     n_corpus_matches: int = 0
@@ -185,6 +187,52 @@ def reference_year_stats(paper_refs: list[str]) -> tuple[Optional[int], Optional
     return median, max(years)
 
 
+NOVELTY_REVIEWER_PROMPT = """You are reviewing a scientific manuscript for a journal editor.
+Your task is to assess its novelty relative to the existing literature.
+
+You are given:
+- The manuscript itself (attached as PDF)
+- A list of the most semantically similar papers found in our corpus,
+  with their titles, abstracts, and years
+
+Write a novelty assessment as a working reviewer would write it, in prose,
+addressed to the editor. Cover the following in a natural flow:
+
+1. What is the manuscript's central claim of novelty? Read the abstract
+   and introduction carefully; identify what the authors say is new.
+
+2. How does this claim hold up against the similar papers listed?
+   For each closely related paper (say the top three or four), briefly
+   compare: what does the current manuscript do that this related paper
+   does not, or what does the related paper already do that the current
+   manuscript re-invents.
+
+3. Is the current manuscript missing citations to relevant prior work?
+   Check whether papers in the similar-papers list appear in the
+   manuscript's reference list. If a highly similar paper (top 3) is
+   not cited, flag it as a gap.
+
+4. Overall judgment: is the manuscript's novelty claim substantiated?
+   Three levels: clearly novel (a real contribution to the field),
+   incremental (a modest advance over existing work, still publishable),
+   or overlaps with prior work (the claimed contribution is already
+   present in the literature).
+
+Keep the assessment to 3 to 5 short paragraphs. Do not use bullet points
+or numbered lists in your output. Do not include any metadata such as
+confidence scores, agent names, or JSON. Write the assessment as you
+would in a real referee report.
+
+At the end, on a separate line, write your overall judgment exactly in
+this format (no extra words):
+Novelty verdict: clearly novel
+Novelty verdict: incremental
+Novelty verdict: overlaps with prior work
+Pick one of the three.
+
+Use LaTeX notation for any mathematical symbols and equations in your prose. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$` so the report renders cleanly in markdown with math support."""
+
+
 NOVELTY_SCHEMA = {
     "type": "object",
     "properties": {
@@ -305,7 +353,7 @@ FIRST 8 REFERENCES (as printed):
 {refs_first_8}"""
 
 
-def analyze_novelty(doi: str, client: Optional[GeminiClient] = None) -> NoveltyReport:
+def analyze_novelty(doi: str, client: Optional[GeminiClient] = None, uploaded_file: Any = None) -> NoveltyReport:
     if client is None:
         client = GeminiClient()
 
@@ -354,32 +402,46 @@ Assess this manuscript's novelty and literature coverage using the
 record_novelty_findings tool. Focus on the four categories described in
 the system prompt. Zero findings is acceptable if coverage is thorough."""
 
-    result = client.structured_call(
-        model=CONFIG["gemini"]["model_specialist"],
-        system=NOVELTY_SYSTEM,
-        user=user,
-        tool_name="record_novelty_findings",
-        tool_description="Record structured novelty and prior-art findings for a physics manuscript.",
-        tool_input_schema=NOVELTY_SCHEMA,
-        max_output_tokens=3000,
-        fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+    pdf_path = get_path("raw_data") / "pdf" / f"{doi}.pdf"
+    # Prefer uploaded_file (cached on Gemini's side) over inline pdf_bytes.
+    pdf_bytes = None
+    if uploaded_file is None:
+        pdf_bytes = pdf_path.read_bytes() if pdf_path.exists() else None
+
+    user_prose = (
+        "SIMILAR PAPERS FOUND IN OUR CORPUS "
+        f"({len(related)} items, ordered by semantic similarity):\n\n"
+        + _format_related(related)
+        + "\n\nReference-year statistics of the manuscript: "
+        + (f"median {med_yr}, most recent {max_yr}." if med_yr else "unavailable.")
     )
 
-    for f in result.tool_input.get("findings", []):
-        report.findings.append(NoveltyFinding(
-            kind=f["kind"],
-            severity=f["severity"],
-            location=f.get("location", ""),
-            evidence=f["evidence"],
-            suggested_fix=f.get("suggested_fix", ""),
-            references=f.get("references", []),
-            confidence=f.get("confidence", 0.0),
-        ))
+    model_name = CONFIG["gemini"]["model_specialist"]
+    text, in_tok, out_tok = client.plain_text(
+        model=model_name,
+        system=NOVELTY_REVIEWER_PROMPT,
+        user=user_prose,
+        max_output_tokens=3000,
+        temperature=0.3,
+        pdf_bytes=pdf_bytes,
+        uploaded_file=uploaded_file,
+    )
 
-    report.n_findings = len(report.findings)
-    report.model = result.model
-    report.input_tokens = result.input_tokens
-    report.output_tokens = result.output_tokens
+    narrative_lines = []
+    verdict = ""
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("novelty verdict:"):
+            verdict = stripped.split(":", 1)[1].strip().lower()
+        else:
+            narrative_lines.append(line)
+    report.narrative = "\n".join(narrative_lines).strip()
+    report.verdict = verdict
+
+    report.n_findings = 0
+    report.model = model_name
+    report.input_tokens = in_tok
+    report.output_tokens = out_tok
     return report
 
 

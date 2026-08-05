@@ -19,6 +19,8 @@ downstream code that only reads doi_label + n_claims_total continues
 to work unchanged."""
 from __future__ import annotations
 
+from typing import Any
+
 import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -154,7 +156,9 @@ PRINCIPLES:
 - Be exhaustive for the categories, not exhaustive in general.
 - Use the author's language where possible.
 - If a claim cannot be verified in principle, omit it.
-- Prefer algebraic_identity over symmetry for concrete commutation statements."""
+- Prefer algebraic_identity over symmetry for concrete commutation statements.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
 
 
 MATH_SCHEMA = {
@@ -262,7 +266,9 @@ STRICT RULES:
 - The JSON output order MUST be: symbols first, then claims.
 
 Aim for 5-15 claims for a typical paper; extended surveys may go
-higher, short notes lower."""
+higher, short notes lower.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
 
 
 BIO_SCHEMA = {
@@ -392,7 +398,9 @@ STRICT RULES:
 - The JSON output order MUST be: symbols first, then claims.
 
 Aim for 6-15 claims for a full paper; short reports may have fewer,
-comprehensive studies may have more."""
+comprehensive studies may have more.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
 
 CHEM_SCHEMA = {
     "type": "object",
@@ -532,7 +540,9 @@ STRICT RULES:
 - The JSON output order MUST be: symbols first, then claims.
 
 Aim for 8-20 claims for a full paper covering synthesis, characterization,
-and performance; smaller studies may have fewer."""
+and performance; smaller studies may have fewer.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
 
 
 def _format_paper(parsed: dict) -> str:
@@ -556,7 +566,7 @@ METADATA:
 
 
 def extract_claims(parsed_paper: dict, client: GeminiClient | None = None,
-                   field: str = "physics") -> ExtractedClaims:
+                    field: str = "physics", uploaded_file: Any = None) -> ExtractedClaims:
     if client is None:
         client = GeminiClient()
     model = CONFIG["gemini"]["model_classifier"]
@@ -594,6 +604,7 @@ def extract_claims(parsed_paper: dict, client: GeminiClient | None = None,
         tool_description=active_tool_desc,
         tool_input_schema=active_schema,
         max_output_tokens=8192,
+        uploaded_file=uploaded_file,
     )
 
     payload = result.tool_input

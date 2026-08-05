@@ -31,6 +31,7 @@ from peerlens.agents.dimensional_checker import check_paper as dim_check, save_r
 from peerlens.agents.sympy_verifier import verify_paper, save_report as save_sym
 from peerlens.agents.novelty_agent import analyze_novelty, save_report as save_nov
 from peerlens.agents.structure_agent import analyze_structure, save_report as save_str
+from peerlens.agents.summary_agent import analyze_summary, save_report as save_sum
 from peerlens.agents.domain_expert import analyze_domain, save_report as save_dom
 from peerlens.agents.reproducibility_agent import analyze_reproducibility, save_report as save_repro
 from peerlens.agents.llm_detector import analyze_llm_authorship, save_report as save_llm
@@ -158,89 +159,107 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
 
     parsed = ensure_parsed(doi, pdf_path)
 
-    console.print("[cyan]1/10[/cyan] Classification (subdomain + type + field)")
+    # Upload PDF once, share across all agents (Gemini File API caches
+    # for 48h; token cost drops by ~60% versus re-uploading per agent).
+    uploaded_pdf = None
+    try:
+        uploaded_pdf = client.upload_pdf(pdf_path, display_name=doi)
+        console.print(f"       [dim]PDF cached on Gemini: {getattr(uploaded_pdf, 'name', '?')}[/dim]")
+    except Exception as e:
+        console.print(f"       [yellow]PDF upload failed ({e}); agents will fall back to inline PDF bytes[/yellow]")
+
+    console.print("[cyan]1/11[/cyan] Classification (subdomain + type + field)")
     cls_path = get_path("processed_data") / "classifications" / f"{doi}.json"
     if cls_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        cls = classify_paper(parsed, client=client)
+        cls = classify_paper(parsed, client=client, uploaded_file=uploaded_pdf)
         save_classification(cls, cls_path.parent)
         console.print(f"       subdomains={cls.subdomains}, field={cls.field_top}, types={cls.paper_types}")
     cls_data = json.loads(cls_path.read_text())
     field_top = cls_data.get("field_top", "physics")
 
-    console.print("[cyan]2/10[/cyan] Claim extraction (field={0})".format(field_top))
+    console.print("[cyan]2/11[/cyan] Claim extraction (field={0})".format(field_top))
     claims_path = get_path("processed_data") / "claims" / f"{doi}.json"
     if claims_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        res = extract_claims(parsed, client=client, field=field_top)
+        res = extract_claims(parsed, client=client, field=field_top, uploaded_file=uploaded_pdf)
         save_claims(res)
         console.print(f"       {res.n_claims_total} claims, {len(res.symbols)} symbols")
     claims_data = json.loads(claims_path.read_text())
 
-    console.print("[cyan]3/10[/cyan] Dimensional analysis")
+    console.print("[cyan]3/11[/cyan] Dimensional analysis")
     dim_path = get_path("processed_data") / "dimensional_reports" / f"{doi}.json"
     if dim_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = dim_check(claims_data, pdf_path, max_vision_calls=2, client=client, field=field_top)
+        rep = dim_check(claims_data, pdf_path, max_vision_calls=2, client=client, field=field_top, uploaded_file=uploaded_pdf)
         save_dim(rep)
         if getattr(rep, "gate_reason", ""):
             console.print(f"       [dim]{rep.gate_reason}[/dim]")
         else:
             console.print(f"       {rep.n_findings} findings")
 
-    console.print("[cyan]4/10[/cyan] Symbolic verification")
+    console.print("[cyan]4/11[/cyan] Symbolic verification")
     sym_path = get_path("processed_data") / "sympy_reports" / f"{doi}.json"
     if sym_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = verify_paper(claims_data, pdf_path, max_claims=8, client=client)
+        rep = verify_paper(claims_data, pdf_path, max_claims=8, client=client, uploaded_file=uploaded_pdf)
         save_sym(rep)
         console.print(f"       verified={rep.n_verified}, refuted={rep.n_refuted}, "
                       f"unable={rep.n_unable}")
 
-    console.print("[cyan]5/10[/cyan] Novelty / literature")
+    console.print("[cyan]5/11[/cyan] Novelty / literature")
     nov_path = get_path("processed_data") / "novelty_reports" / f"{doi}.json"
     if nov_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = analyze_novelty(doi, client=client)
+        rep = analyze_novelty(doi, client=client, uploaded_file=uploaded_pdf)
         save_nov(rep)
         console.print(f"       {rep.n_related_retrieved} related, {rep.n_findings} findings")
 
-    console.print("[cyan]6/10[/cyan] Structure & narrative")
+    console.print("[cyan]6/11[/cyan] Structure & narrative")
     str_path = get_path("processed_data") / "structure_reports" / f"{doi}.json"
     if str_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = analyze_structure(doi, client=client)
+        rep = analyze_structure(doi, client=client, uploaded_file=uploaded_pdf)
         save_str(rep)
         console.print(f"       {rep.n_findings} findings")
 
-    console.print("[cyan]7/10[/cyan] Domain expert")
+    console.print("[cyan]7/11[/cyan] Domain expert")
     dom_path = get_path("processed_data") / "domain_reports" / f"{doi}.json"
     if dom_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = analyze_domain(doi, client=client)
+        rep = analyze_domain(doi, client=client, uploaded_file=uploaded_pdf)
         save_dom(rep)
         console.print(f"       persona={rep.persona} findings={rep.n_findings}")
 
-    console.print("[cyan]8/10[/cyan] Reproducibility")
+    console.print("[cyan]8/11[/cyan] Reproducibility")
     repro_path = get_path("processed_data") / "reproducibility_reports" / f"{doi}.json"
     if repro_path.exists():
         console.print("       [dim]cached[/dim]")
     else:
-        rep = analyze_reproducibility(doi, client=client)
+        rep = analyze_reproducibility(doi, client=client, uploaded_file=uploaded_pdf)
         save_repro(rep)
         console.print(f"       scrutiny={rep.scrutiny_level} findings={rep.n_findings}")
 
-    console.print("[cyan]9/10[/cyan] Math aggregation")
+    console.print("[cyan]9/11[/cyan] Summary (plain-language)")
+    sum_path = get_path("processed_data") / "summary_reports" / f"{doi}.json"
+    if sum_path.exists():
+        console.print("       [dim]cached[/dim]")
+    else:
+        rep = analyze_summary(doi, client=client, uploaded_file=uploaded_pdf)
+        save_sum(rep)
+        console.print(f"       {rep.n_paragraphs} paragraphs, {rep.output_tokens} out tokens")
+
+    console.print("[cyan]10/11[/cyan] Math aggregation")
     aggregate_and_render(doi)
 
-    console.print("[cyan]10/10[/cyan] Full referee section + triage score")
+    console.print("[cyan]11/11[/cyan] Full referee section + triage score")
     json_path, md_path = aggregate_and_render_full(doi)
 
     triage_path = get_path("processed_data") / "triage_scores" / f"{doi}.json"
@@ -278,6 +297,9 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
         console.print(f"Policy:   [{llm_color}]{llm_verdict.upper()}[/{llm_color}]  (confidence {cconf})")
     console.print(f"Elapsed:  {time.time()-total_t0:.1f}s")
     console.print(f"Report:   {md_path}")
+
+    if uploaded_pdf is not None:
+        client.delete_pdf(uploaded_pdf)
 
     _refresh_dashboard()
     dashboard = get_path("processed_data") / "editorial_dashboard.html"

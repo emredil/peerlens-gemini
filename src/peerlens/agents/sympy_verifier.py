@@ -8,7 +8,7 @@ import textwrap
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
@@ -30,6 +30,8 @@ class SymPyFinding:
     input_tokens: int = 0
     output_tokens: int = 0
     equations_available: list[str] = field(default_factory=list)
+    gemini_verdict: str = ""  # verified | refuted | unable_to_verify
+    gemini_reasoning: str = ""
 
 
 @dataclass
@@ -42,6 +44,13 @@ class SymPyReport:
     findings: list[SymPyFinding] = field(default_factory=list)
     total_tokens_in: int = 0
     total_tokens_out: int = 0
+    n_gemini_verified: int = 0
+    n_gemini_refuted: int = 0
+    n_gemini_unable: int = 0
+    n_agreement: int = 0
+    n_conflict: int = 0
+    gemini_tokens_in: int = 0
+    gemini_tokens_out: int = 0
 
 
 SNIPPET_TEMPLATE = textwrap.dedent('''\
@@ -195,6 +204,115 @@ If translation is genuinely impossible from the LaTeX given, emit
 'unable_to_verify' honestly. Prefer honesty over false positives."""
 
 
+# ---------------------------------------------------------------------------
+# Gemini judgment layer (parallel to SymPy verification)
+# ---------------------------------------------------------------------------
+
+GEMINI_JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "judgments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_id": {"type": "integer"},
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["verified", "refuted", "unable_to_verify"],
+                    },
+                    "reasoning": {"type": "string"},
+                },
+                "required": ["claim_id", "verdict", "reasoning"],
+            },
+        },
+    },
+    "required": ["judgments"],
+}
+
+
+GEMINI_JUDGE_SYSTEM = """You are a working referee evaluating the algebraic correctness of specific identities claimed in a scientific manuscript. You have been given the manuscript itself and a list of claims flagged for symbolic verification.
+
+For each claim, decide whether the algebraic identity holds. Base your decision only on the manuscript and on standard mathematical reasoning. Do not invoke external references. Do not attempt to run code.
+
+For each claim return one of:
+- verified: the identity is correct given the definitions in the manuscript
+- refuted: the identity is inconsistent with definitions in the manuscript or violates elementary algebra
+- unable_to_verify: the identity cannot be judged with the information available (missing definitions, ambiguous notation, etc.)
+
+Give brief reasoning (one or two sentences) for each verdict. Do not restate the claim; explain why you reached the verdict.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
+
+
+def gemini_judge_claims(
+    claims_data: dict,
+    symbols_catalogue: list,
+    client: GeminiClient,
+    uploaded_file: Any = None,
+) -> tuple[dict[int, tuple[str, str]], int, int]:
+    """Ask Gemini to judge all sympy-flagged claims in one batched call.
+
+    Returns:
+        (verdicts_by_claim_id, tokens_in, tokens_out)
+        verdicts_by_claim_id: {claim_id: (verdict, reasoning)}
+    """
+    sympy_claims = [
+        (i, c) for i, c in enumerate(claims_data.get("claims", []))
+        if c.get("verification_method") == "sympy"
+    ]
+    if not sympy_claims:
+        return {}, 0, 0
+
+    # Build the batched user prompt
+    claim_blocks = []
+    for i, c in sympy_claims:
+        block = f"CLAIM {i} (type={c.get('claim_type', '?')}):\n"
+        block += f"  Location: {c.get('location', '?')}\n"
+        block += f"  Statement: {c.get('natural_language', '')}\n"
+        if c.get("referenced_equations"):
+            block += f"  Referenced equations: {c.get('referenced_equations')}\n"
+        if c.get("check_hint"):
+            block += f"  Check hint: {c.get('check_hint')}\n"
+        claim_blocks.append(block)
+
+    symbols_text = ""
+    if symbols_catalogue:
+        symbols_text = "SYMBOL CATALOGUE (from claim extractor):\n"
+        for s in symbols_catalogue[:30]:
+            symbols_text += f"  {s.get('symbol', '?')}: {s.get('meaning', '')}\n"
+
+    user = (
+        f"You will judge {len(sympy_claims)} algebraic identity claims from this manuscript.\n\n"
+        f"{symbols_text}\n"
+        f"CLAIMS TO JUDGE:\n\n"
+        + "\n".join(claim_blocks)
+        + "\n\nReturn a judgment for each claim by calling record_judgments."
+    )
+
+    result = client.structured_call(
+        model=CONFIG["gemini"]["model_specialist"],
+        system=GEMINI_JUDGE_SYSTEM,
+        user=user,
+        tool_name="record_judgments",
+        tool_description="Record per-claim algebraic verdicts.",
+        tool_input_schema=GEMINI_JUDGE_SCHEMA,
+        max_output_tokens=4000,
+        fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+        uploaded_file=uploaded_file,
+    )
+
+    out: dict[int, tuple[str, str]] = {}
+    for j in result.tool_input.get("judgments", []):
+        cid = j.get("claim_id")
+        v = j.get("verdict", "")
+        r = j.get("reasoning", "")
+        if isinstance(cid, int) and v in ("verified", "refuted", "unable_to_verify"):
+            out[cid] = (v, r)
+
+    return out, result.input_tokens, result.output_tokens
+
+
 def build_snippet(
     claim: dict,
     symbols_catalogue: list[dict],
@@ -259,6 +377,7 @@ def verify_paper(
     pdf_path: Path,
     max_claims: Optional[int] = None,
     client: GeminiClient | None = None,
+    uploaded_file: Any = None,
 ) -> SymPyReport:
     if client is None:
         client = GeminiClient()
@@ -274,6 +393,13 @@ def verify_paper(
         sympy_claims = sympy_claims[:max_claims]
 
     symbols_catalogue = claims_data.get("symbols", [])
+
+    # Batched Gemini judgment for all sympy-flagged claims.
+    gemini_verdicts, gem_in, gem_out = gemini_judge_claims(
+        claims_data, symbols_catalogue, client, uploaded_file=uploaded_file,
+    )
+    report.gemini_tokens_in = gem_in
+    report.gemini_tokens_out = gem_out
 
     for claim_id, claim in sympy_claims:
         ref_eqs = claim.get("referenced_equations", [])
@@ -307,6 +433,8 @@ def verify_paper(
         else:
             severity = "warning" if conf > 0.5 else "info"
 
+        g_verdict, g_reasoning = gemini_verdicts.get(claim_id, ("", ""))
+
         finding = SymPyFinding(
             claim_id=claim_id,
             location=claim.get("location", ""),
@@ -321,6 +449,8 @@ def verify_paper(
             input_tokens=in_t,
             output_tokens=out_t,
             equations_available=sorted(equation_latex.keys()),
+            gemini_verdict=g_verdict,
+            gemini_reasoning=g_reasoning,
         )
         report.findings.append(finding)
 
@@ -328,6 +458,17 @@ def verify_paper(
     report.n_verified = sum(1 for f in report.findings if f.verdict == "verified")
     report.n_refuted = sum(1 for f in report.findings if f.verdict == "refuted")
     report.n_unable = sum(1 for f in report.findings if f.verdict == "unable_to_verify")
+
+    # Gemini-layer totals + agreement/conflict.
+    report.n_gemini_verified = sum(1 for f in report.findings if f.gemini_verdict == "verified")
+    report.n_gemini_refuted = sum(1 for f in report.findings if f.gemini_verdict == "refuted")
+    report.n_gemini_unable = sum(1 for f in report.findings if f.gemini_verdict == "unable_to_verify")
+    report.n_agreement = sum(1 for f in report.findings if f.verdict == f.gemini_verdict and f.verdict != "")
+    report.n_conflict = sum(
+        1 for f in report.findings
+        if f.gemini_verdict and f.verdict and f.verdict != f.gemini_verdict
+        and not (f.verdict == "unable_to_verify" or f.gemini_verdict == "unable_to_verify")
+    )
     return report
 
 

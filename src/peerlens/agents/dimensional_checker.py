@@ -5,7 +5,7 @@ import base64
 import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import fitz
 
@@ -111,7 +111,9 @@ SEVERITY:
 - `info`: purely descriptive.
 
 Produce 3-10 findings per paper. If the paper has no dimensional issues at
-all, produce a single finding with verdict `consistent` summarising it."""
+all, produce a single finding with verdict `consistent` summarising it.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
 
 
 TIER_B_SYSTEM = """You are a physics referee reading an equation directly from a PDF page image.
@@ -125,7 +127,9 @@ Return one dimensional finding via the record_dimensional_findings tool with:
 - severity: critical / warning / info
 - evidence: cite the specific equation text you see and the specific units.
 - suggested_fix: if not consistent.
-- confidence: 0.8-1.0 for vision-based verdicts."""
+- confidence: 0.8-1.0 for vision-based verdicts.
+
+Use LaTeX notation for any mathematical symbols and equations in your output. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$`. Never use Unicode math characters."""
 
 
 def _format_extractor_output(claims_data: dict) -> str:
@@ -151,7 +155,7 @@ CLAIMS TO CONSIDER:
 {chr(10).join(claims_list)}"""
 
 
-def tier_a_check(claims_data: dict, client: GeminiClient | None = None) -> tuple[list[DimensionalFinding], int, int, list[dict]]:
+def tier_a_check(claims_data: dict, client: GeminiClient | None = None, uploaded_file: Any = None) -> tuple[list[DimensionalFinding], int, int, list[dict]]:
     if client is None:
         client = GeminiClient()
     model = CONFIG["gemini"]["model_classifier"]
@@ -165,6 +169,7 @@ def tier_a_check(claims_data: dict, client: GeminiClient | None = None) -> tuple
         tool_input_schema=TIER_A_SCHEMA,
         max_output_tokens=4096,
         fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+        uploaded_file=uploaded_file,
     )
 
     raw = result.tool_input.get("findings", [])
@@ -212,6 +217,7 @@ def tier_b_verify(
     raw_finding: dict,
     claims_data: dict,
     client: GeminiClient | None = None,
+    uploaded_file: Any = None,
 ) -> tuple[Optional[DimensionalFinding], int, int, int]:
     if client is None:
         client = GeminiClient()
@@ -249,6 +255,7 @@ def tier_b_verify(
         max_output_tokens=2048,
         images=[{"mime": "image/png", "data": png_bytes}],
         fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+        uploaded_file=uploaded_file,
     )
 
     raw_out = result.tool_input.get("findings", [])
@@ -276,6 +283,7 @@ def check_paper(
     max_vision_calls: int = 3,
     client: GeminiClient | None = None,
     field: str = "physics",
+    uploaded_file: Any = None,
 ) -> DimensionalReport:
     if client is None:
         client = GeminiClient()
@@ -292,14 +300,14 @@ def check_paper(
         report.gate_reason = f"skipped: field={field} (dimensional check not applicable)"
         return report
 
-    tier_a_findings, in_a, out_a, need_vision = tier_a_check(claims_data, client=client)
+    tier_a_findings, in_a, out_a, need_vision = tier_a_check(claims_data, client=client, uploaded_file=uploaded_file)
     report.findings.extend(tier_a_findings)
     report.tier_a_tokens_in = in_a
     report.tier_a_tokens_out = out_a
 
     for raw in need_vision[:max_vision_calls]:
         finding, in_b, out_b, pages = tier_b_verify(
-            doi, pdf_path, raw, claims_data, client=client,
+            doi, pdf_path, raw, claims_data, client=client, uploaded_file=uploaded_file,
         )
         report.tier_b_tokens_in += in_b
         report.tier_b_tokens_out += out_b

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
@@ -44,6 +44,10 @@ class DomainReport:
     n_critical: int = 0
     n_warning: int = 0
     findings: list[DomainFinding] = field(default_factory=list)
+    strengths_narrative: str = ""
+    weaknesses_narrative: str = ""
+    commentary_narrative: str = ""
+    verdict: str = ""  # "accept" | "minor revision" | "major revision" | "reject"
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
@@ -421,6 +425,49 @@ DEFAULT_UNIVERSAL = {
 # Prompt build + agent
 # ---------------------------------------------------------------------------
 
+DOMAIN_REVIEWER_PROMPT = """You are a working referee for a scientific journal, with expertise as {persona_description}. You have been asked by the editor to evaluate a manuscript in your field of expertise.
+
+You are given:
+- The manuscript itself (attached as PDF)
+- The subdomain classification: {subdomain}
+- The manuscript is approximately {n_pages} pages long
+
+Your task has two parts. Write each in flowing prose, addressed to the editor, without bullet points or numbered lists.
+
+PART 1: OVERALL STRENGTHS AND WEAKNESSES
+
+First, write {n_strengths_para} paragraph(s) on the manuscript's overall strengths. Focus on the substantive contributions: what makes this paper worth publishing, what does it get right technically, what is its most valuable aspect for readers in your field.
+
+Then write {n_weaknesses_para} paragraph(s) on the manuscript's overall weaknesses. Focus on the substantive concerns: what technical or methodological problems does it have, what claims are insufficiently supported, what would you require the authors to address before recommending acceptance.
+
+Separate the two with a clear marker line:
+
+===STRENGTHS===
+(your strengths prose here)
+
+===WEAKNESSES===
+(your weaknesses prose here)
+
+PART 2: SECTION-BY-SECTION COMMENTARY
+
+After the weaknesses, write another marker line:
+
+===COMMENTARY===
+
+Then write {n_commentary_para} paragraph(s) of detailed commentary on specific sections or claims of the manuscript. Reference specific equations, figures, or sections by number where appropriate. This is where you point out technical issues at the level of "in Section 3.2, the derivation of Eq. 14 assumes X, but the authors have not justified this assumption." Write as a technically engaged referee would.
+
+At the very end, on a separate line, write your overall recommendation exactly in one of these formats (pick one):
+
+Domain verdict: accept
+Domain verdict: minor revision
+Domain verdict: major revision
+Domain verdict: reject
+
+Base your verdict on the balance of strengths and weaknesses.
+
+Use LaTeX notation for any mathematical symbols and equations in your prose. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$` so the report renders cleanly in markdown with math support."""
+
+
 DOMAIN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -575,7 +622,7 @@ def _dedupe_findings(findings: list[DomainFinding]) -> list[DomainFinding]:
     return out
 
 
-def analyze_domain(doi: str, client: Optional[GeminiClient] = None) -> DomainReport:
+def analyze_domain(doi: str, client: Optional[GeminiClient] = None, uploaded_file: Any = None) -> DomainReport:
     if client is None:
         client = GeminiClient()
 
@@ -590,60 +637,110 @@ def analyze_domain(doi: str, client: Optional[GeminiClient] = None) -> DomainRep
     subdomain = _pick_primary_subdomain(classification)
     report.subdomain_used = subdomain
 
-    persona, system_prompt = _build_system_prompt(subdomain)
+    # Load persona description (from DOMAIN_PROMPTS or DEFAULT_UNIVERSAL).
+    if subdomain in DOMAIN_PROMPTS:
+        persona = DOMAIN_PROMPTS[subdomain]["persona"]
+    else:
+        persona = DEFAULT_UNIVERSAL["persona"]
     report.persona = persona
 
-    user = f"""PAPER CONTEXT:
+    # Compute page-count-adaptive paragraph counts.
+    n_pages = parsed.get("n_pages", 0) or 10
+    if n_pages < 10:
+        n_strengths_para = 1
+        n_weaknesses_para = 1
+        n_commentary_para = 1
+    elif n_pages < 20:
+        n_strengths_para = 2
+        n_weaknesses_para = 2
+        n_commentary_para = 2
+    elif n_pages < 30:
+        n_strengths_para = 2
+        n_weaknesses_para = 2
+        n_commentary_para = 3
+    else:
+        n_strengths_para = 3
+        n_weaknesses_para = 3
+        n_commentary_para = 4
 
-{_format_paper(parsed)}
-
-
-Apply your specialist checklist as GUIDANCE. Emit concrete findings ONLY
-when you can quote the exact text in the paper that concerns you.
-Empty findings list is the correct answer whenever nothing concrete is wrong."""
-
-    result = client.structured_call(
-        model=CONFIG["gemini"]["model_specialist"],
-        system=system_prompt,
-        user=user,
-        tool_name="record_domain_findings",
-        tool_description="Record subdomain-specific referee findings for the manuscript.",
-        tool_input_schema=DOMAIN_SCHEMA,
-        max_output_tokens=1500,
-        fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+    system_prompt = DOMAIN_REVIEWER_PROMPT.format(
+        persona_description=persona,
+        subdomain=subdomain,
+        n_pages=n_pages,
+        n_strengths_para=n_strengths_para,
+        n_weaknesses_para=n_weaknesses_para,
+        n_commentary_para=n_commentary_para,
     )
 
-    raw_findings: list[DomainFinding] = []
-    for f in result.tool_input.get("findings", []):
-        # Defensive: schema restricts kind + severity but strip drift.
-        if f.get("severity") not in ("critical", "warning"):
-            continue
-        if f.get("kind") != "domain_concern":
-            continue
-        try:
-            conf = float(f.get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            conf = 0.0
-        if conf < 0.5:
-            continue
-        raw_findings.append(DomainFinding(
-            kind=f["kind"],
-            severity=f["severity"],
-            location=f.get("location", ""),
-            evidence=f["evidence"],
-            suggested_fix=f.get("suggested_fix", ""),
-            confidence=conf,
-        ))
+    # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.
+    pdf_path = get_path("raw_data") / "pdf" / f"{doi}.pdf"
+    pdf_bytes = None
+    if uploaded_file is None:
+        pdf_bytes = pdf_path.read_bytes() if pdf_path.exists() else None
 
-    # Post-hoc dedup: same (location, kind) collapses.
-    report.findings = _dedupe_findings(raw_findings)
+    user_prose = f"Manuscript subdomain: {subdomain}. Approximate length: {n_pages} pages.\n\nPlease produce the two-part evaluation as instructed."
 
-    report.n_findings = len(report.findings)
-    report.n_critical = sum(1 for f in report.findings if f.severity == "critical")
-    report.n_warning = sum(1 for f in report.findings if f.severity == "warning")
-    report.model = result.model
-    report.input_tokens = result.input_tokens
-    report.output_tokens = result.output_tokens
+    model_name = CONFIG["gemini"]["model_specialist"]
+    text, in_tok, out_tok = client.plain_text(
+        model=model_name,
+        system=system_prompt,
+        user=user_prose,
+        max_output_tokens=4000,
+        temperature=0.3,
+        pdf_bytes=pdf_bytes,
+        uploaded_file=uploaded_file,
+    )
+
+    # Parse the three-section marker-delimited output.
+    strengths = ""
+    weaknesses = ""
+    commentary = ""
+    verdict = ""
+
+    current_section = None
+    buf: list[str] = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("===STRENGTHS==="):
+            current_section = "strengths"
+            buf = []
+            continue
+        if stripped.startswith("===WEAKNESSES==="):
+            strengths = "\n".join(buf).strip()
+            current_section = "weaknesses"
+            buf = []
+            continue
+        if stripped.startswith("===COMMENTARY==="):
+            weaknesses = "\n".join(buf).strip()
+            current_section = "commentary"
+            buf = []
+            continue
+        if stripped.lower().startswith("domain verdict:"):
+            if current_section == "commentary":
+                commentary = "\n".join(buf).strip()
+            verdict = stripped.split(":", 1)[1].strip().lower()
+            current_section = None
+            buf = []
+            continue
+        if current_section is not None:
+            buf.append(line)
+
+    # Flush any remaining buffer if verdict line was missing.
+    if current_section == "commentary" and not commentary:
+        commentary = "\n".join(buf).strip()
+
+    report.strengths_narrative = strengths
+    report.weaknesses_narrative = weaknesses
+    report.commentary_narrative = commentary
+    report.verdict = verdict
+
+    report.findings = []
+    report.n_findings = 0
+    report.n_critical = 0
+    report.n_warning = 0
+    report.model = model_name
+    report.input_tokens = in_tok
+    report.output_tokens = out_tok
     return report
 
 

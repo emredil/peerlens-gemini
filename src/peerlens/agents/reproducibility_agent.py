@@ -19,7 +19,7 @@ import json
 import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
@@ -40,6 +40,8 @@ class ReproReport:
     doi_label: str
     paper_types: list[str] = field(default_factory=list)
     scrutiny_level: str = "none"  # none | medium | deep
+    narrative: str = ""
+    verdict: str = ""  # "reproducible" | "mostly reproducible" | "gaps" | "not applicable" 
     detected_signals: dict = field(default_factory=dict)
     gate_reason: str = ""
     n_findings: int = 0
@@ -219,6 +221,38 @@ def _decide_gate(paper_types: list[str], signals: dict, field: str = "physics") 
     return "none", "no signals detected, paper appears purely theoretical"
 
 
+REPRO_REVIEWER_PROMPT = """You are a working referee for a scientific journal. You have been asked by the editor to evaluate the reproducibility of a manuscript.
+
+You are given:
+- The manuscript itself (attached as PDF)
+- The manuscript's field: {field}
+- The manuscript's subdomain classification: {subdomain}
+- The manuscript is approximately {n_pages} pages long
+- The paper types: {paper_types} (for example, theoretical, experimental, computational)
+
+Your task is to write {n_para} paragraph(s) of prose commentary on the manuscript's reproducibility, addressed to the editor. No bullet points, no numbered lists.
+
+Consider the following as guidance, but only write about points that genuinely apply to this manuscript in its field:
+
+- Code availability: does the manuscript provide a code repository (GitHub, Zenodo, or similar)? Is the code specific enough that another group could rerun the analysis? If code is essential to the paper (numerical work, machine learning, simulations), is it deposited?
+- Data availability: for experimental or observational papers, are the underlying datasets provided? For chemistry papers, is supporting information (SI) with characterization data available? For biology papers, are datasets deposited (GEO, SRA, PDB, or similar)? For computational papers, are inputs and outputs available?
+- Method reporting: are experimental protocols described in enough detail that a competent lab could reproduce them? For simulations, are parameters, initial conditions, and software versions specified? For theoretical papers, are derivations complete enough that a reader can follow every step?
+- Field-specific concerns: for chemistry, HPLC/NMR/XRD conditions and purity specifications; for biology, cell lines, antibody catalog numbers, replicate counts, sample sizes and their justification, and IRB/IACUC approvals where relevant; for physics experimental, instrument specifications and calibration.
+
+Focus on substantive reproducibility issues that would prevent an independent group from reproducing the work. If the paper is a pure theoretical or mathematics work where these considerations do not apply, write a single brief sentence stating so and stop.
+
+At the end, on a separate line, write your overall recommendation exactly in one of these formats (pick one):
+
+Reproducibility verdict: reproducible
+Reproducibility verdict: mostly reproducible
+Reproducibility verdict: gaps
+Reproducibility verdict: not applicable
+
+Use "not applicable" only for pure math or pure theory papers where reproducibility is not a meaningful axis.
+
+Use LaTeX notation for any mathematical symbols and equations in your prose. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$` so the report renders cleanly in markdown with math support."""
+
+
 REPRO_SCHEMA = {
     "type": "object",
     "properties": {
@@ -326,7 +360,7 @@ REPRODUCIBILITY SIGNALS DETECTED (from pattern scan):
   Tables: {signals['n_tables']}, Figures: {signals['n_figures']}"""
 
 
-def analyze_reproducibility(doi: str, client: Optional[GeminiClient] = None) -> ReproReport:
+def analyze_reproducibility(doi: str, client: Optional[GeminiClient] = None, uploaded_file: Any = None) -> ReproReport:
     report = ReproReport(doi_label=doi)
 
     parsed_path = get_path("processed_data") / "parsed" / f"{doi}.json"
@@ -355,48 +389,72 @@ def analyze_reproducibility(doi: str, client: Optional[GeminiClient] = None) -> 
     if client is None:
         client = GeminiClient()
 
-    system_prompt = SYSTEM_TEMPLATES[scrutiny]
-    user = f"""PAPER CONTEXT:
+    # Determine paragraph budget from paper length.
+    n_pages = parsed.get("n_pages", 0) or 10
+    if n_pages < 10:
+        n_para = 1
+    elif n_pages < 25:
+        n_para = 1
+    else:
+        n_para = 2
 
-{_format_paper_context(parsed, signals)}
+    subdomain = ""
+    subdomains_list = (classification or {}).get("subdomains", [])
+    if subdomains_list:
+        subdomain = subdomains_list[0]
 
-
-Emit findings ONLY for concrete gaps. Empty findings list is the
-correct answer whenever nothing concrete is missing."""
-
-    result = client.structured_call(
-        model=CONFIG["gemini"]["model_specialist"],
-        system=system_prompt,
-        user=user,
-        tool_name="record_reproducibility_findings",
-        tool_description="Record reproducibility referee findings (warning/critical only).",
-        tool_input_schema=REPRO_SCHEMA,
-        max_output_tokens=2500,
-        fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+    system_prompt = REPRO_REVIEWER_PROMPT.format(
+        field=field_top,
+        subdomain=subdomain or "unknown",
+        n_pages=n_pages,
+        paper_types=", ".join(paper_types) if paper_types else "unspecified",
+        n_para=n_para,
     )
 
-    for f in result.tool_input.get("findings", []):
-        # Defensive: schema forbids info but be safe
-        if f.get("severity") not in ("critical", "warning"):
-            continue
-        if f.get("kind") not in ("missing_code", "missing_data",
-                                  "missing_params", "missing_algorithm"):
-            continue
-        report.findings.append(ReproFinding(
-            kind=f["kind"],
-            severity=f["severity"],
-            location=f.get("location", ""),
-            evidence=f["evidence"],
-            suggested_fix=f.get("suggested_fix", ""),
-            confidence=f.get("confidence", 0.0),
-        ))
+    # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.
+    pdf_path = get_path("raw_data") / "pdf" / f"{doi}.pdf"
+    pdf_bytes = None
+    if uploaded_file is None:
+        pdf_bytes = pdf_path.read_bytes() if pdf_path.exists() else None
 
-    report.n_findings = len(report.findings)
-    report.n_critical = sum(1 for f in report.findings if f.severity == "critical")
-    report.n_warning = sum(1 for f in report.findings if f.severity == "warning")
-    report.model = result.model
-    report.input_tokens = result.input_tokens
-    report.output_tokens = result.output_tokens
+    user_prose = (
+        f"Manuscript field: {field_top}. Subdomain: {subdomain or 'unknown'}. "
+        f"Paper types: {', '.join(paper_types) if paper_types else 'unspecified'}. "
+        f"Approximate length: {n_pages} pages. "
+        f"Scrutiny level assigned by pipeline: {scrutiny}.\n\n"
+        f"Please produce the reproducibility commentary as instructed."
+    )
+
+    model_name = CONFIG["gemini"]["model_specialist"]
+    text, in_tok, out_tok = client.plain_text(
+        model=model_name,
+        system=system_prompt,
+        user=user_prose,
+        max_output_tokens=2500,
+        temperature=0.3,
+        pdf_bytes=pdf_bytes,
+        uploaded_file=uploaded_file,
+    )
+
+    # Parse prose + verdict.
+    narrative_lines = []
+    verdict = ""
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("reproducibility verdict:"):
+            verdict = stripped.split(":", 1)[1].strip().lower()
+        else:
+            narrative_lines.append(line)
+    report.narrative = "\n".join(narrative_lines).strip()
+    report.verdict = verdict
+
+    report.findings = []
+    report.n_findings = 0
+    report.n_critical = 0
+    report.n_warning = 0
+    report.model = model_name
+    report.input_tokens = in_tok
+    report.output_tokens = out_tok
     return report
 
 

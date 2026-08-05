@@ -26,7 +26,7 @@ import json
 import re
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from peerlens.settings import CONFIG, get_path
 from peerlens.gemini_client import GeminiClient
@@ -55,6 +55,7 @@ class StructureFinding:
 class StructureReport:
     doi_label: str
     n_candidates_scanned: int = 0
+    narrative: str = ""
     n_findings: int = 0
     n_critical: int = 0
     n_warning: int = 0
@@ -186,6 +187,30 @@ def scan_sections(parsed: dict, field: str = "physics") -> list[Candidate]:
 # Stage 2: LLM adjudication
 # ---------------------------------------------------------------------------
 
+STRUCTURE_REVIEWER_PROMPT = """You are a working referee for a scientific journal. You have been asked by the editor to evaluate the presentation, clarity, and narrative quality of a manuscript.
+
+You are given:
+- The manuscript itself (attached as PDF)
+- The manuscript is approximately {n_pages} pages long
+
+Your task is to write {n_para} paragraph(s) of prose commentary on the manuscript's presentation and clarity. Address this to the editor, without bullet points or numbered lists.
+
+Consider the following as guidance, but only write about points that genuinely apply to this manuscript:
+
+- Is the overall structure of the paper logical? Do sections flow from one to the next in an order that supports the argument?
+- Are the introduction and conclusion doing their job? Does the introduction motivate the problem and preview the contribution? Does the conclusion connect back to the introduction?
+- Is the notation clean and consistent? Are symbols defined the first time they appear? Are conventions clearly stated?
+- Are equations and figures referenced properly in the text and numbered consistently?
+- Are there passages where the authors leave critical steps as "straightforward", "trivial", "obvious", or "it is easy to show" without justification, in places where the reader would want a fuller argument?
+- Are there sections where the writing becomes unclear, dense, or disorganized in a way that would hinder a specialist reader?
+
+Focus on substantive presentation issues that affect the reader's ability to understand the science, not on minor grammar or typos. If the presentation is uniformly clean, write a brief paragraph confirming this and identifying what the paper does well stylistically (for example, "the paper is well-organized: Section 2 introduces the formalism cleanly, and the notation established there is used consistently throughout the derivations in Sections 3-4").
+
+Do not include any metadata, confidence scores, or verdict lines. Just write the prose commentary. Also write no headings or markers of your own within the prose.
+
+Use LaTeX notation for any mathematical symbols and equations in your prose. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$` so the report renders cleanly in markdown with math support."""
+
+
 STRUCTURE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -298,7 +323,7 @@ EQUATION COUNT: {parsed.get('equation_count', 0)}"""
 MAX_CANDIDATES_PER_CALL = 25
 
 
-def analyze_structure(doi: str, client: Optional[GeminiClient] = None) -> StructureReport:
+def analyze_structure(doi: str, client: Optional[GeminiClient] = None, uploaded_file: Any = None) -> StructureReport:
     if client is None:
         client = GeminiClient()
 
@@ -308,79 +333,48 @@ def analyze_structure(doi: str, client: Optional[GeminiClient] = None) -> Struct
         return report
     parsed = json.loads(parsed_path.read_text())
 
-    classification = _classification_for(doi)
-    field_top = (classification or {}).get("field_top", "physics")
-    candidates = scan_sections(parsed, field=field_top)
-    report.n_candidates_scanned = len(candidates)
+    # Determine paragraph budget from paper length.
+    n_pages = parsed.get("n_pages", 0) or 10
+    if n_pages < 10:
+        n_para = 1
+    elif n_pages < 25:
+        n_para = 1
+    else:
+        n_para = 2
 
-    if not candidates:
-        return report
-
-    # cap to avoid runaway prompts
-    cands = candidates[:MAX_CANDIDATES_PER_CALL]
-
-    user = f"""PAPER CONTEXT:
-
-{_format_paper_summary(parsed)}
-
-
-CANDIDATE TRIGGER PHRASES ({len(cands)}):
-
-{_format_candidates(cands)}
-
-
-Call record_structure_findings with your assessments. Include only the
-candidates that are genuinely worth flagging; be conservative."""
-
-    result = client.structured_call(
-        model=CONFIG["gemini"]["model_specialist"],
-        system=STRUCTURE_SYSTEM,
-        user=user,
-        tool_name="record_structure_findings",
-        tool_description="Record structural / narrative referee findings for the paper.",
-        tool_input_schema=STRUCTURE_SCHEMA,
-        max_output_tokens=1500,
-        fallback_models=CONFIG["gemini"].get("fallback_chain", []),
+    system_prompt = STRUCTURE_REVIEWER_PROMPT.format(
+        n_pages=n_pages,
+        n_para=n_para,
     )
 
-    seen_cids: set[int] = set()
-    for f in result.tool_input.get("findings", []):
-        cid = f.get("candidate_id", -1)
-        if not (0 <= cid < len(cands)):
-            continue
-        # Defensive: schema restricts kind + severity but strip drift.
-        if f.get("severity") not in ("critical", "warning"):
-            continue
-        if f.get("kind") not in ("derivation_gap", "orphan_reference"):
-            continue
-        try:
-            conf = float(f.get("confidence", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            conf = 0.0
-        if conf < 0.5:
-            continue
-        # Dedup: one finding per candidate_id.
-        if cid in seen_cids:
-            continue
-        seen_cids.add(cid)
-        c = cands[cid]
-        report.findings.append(StructureFinding(
-            kind=f["kind"],
-            severity=f["severity"],
-            location=f"Section {c.section_number} {c.section_title}".strip(),
-            trigger_phrase=c.trigger_phrase,
-            context_excerpt=c.context[:600],
-            evidence=f["evidence"],
-            suggested_fix=f.get("suggested_fix", ""),
-            confidence=conf,
-        ))
+    # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.
+    pdf_path = get_path("raw_data") / "pdf" / f"{doi}.pdf"
+    pdf_bytes = None
+    if uploaded_file is None:
+        pdf_bytes = pdf_path.read_bytes() if pdf_path.exists() else None
 
-    report.n_findings = len(report.findings)
-    report.n_critical = sum(1 for f in report.findings if f.severity == "critical")
-    report.n_warning = sum(1 for f in report.findings if f.severity == "warning")
-    report.model = result.model
-    report.input_tokens = result.input_tokens
-    report.output_tokens = result.output_tokens
+    user_prose = f"Please produce the presentation-and-clarity commentary as instructed. The paper is approximately {n_pages} pages."
+
+    model_name = CONFIG["gemini"]["model_specialist"]
+    text, in_tok, out_tok = client.plain_text(
+        model=model_name,
+        system=system_prompt,
+        user=user_prose,
+        max_output_tokens=2000,
+        temperature=0.3,
+        pdf_bytes=pdf_bytes,
+        uploaded_file=uploaded_file,
+    )
+
+    report.narrative = (text or "").strip()
+    report.n_candidates_scanned = 0
+    report.findings = []
+    report.n_findings = 0
+    report.n_critical = 0
+    report.n_warning = 0
+    report.model = model_name
+    report.input_tokens = in_tok
+    report.output_tokens = out_tok
     return report
 
 
