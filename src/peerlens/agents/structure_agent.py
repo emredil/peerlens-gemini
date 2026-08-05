@@ -193,7 +193,7 @@ You are given:
 - The manuscript itself (attached as PDF)
 - The manuscript is approximately {n_pages} pages long
 
-Your task is to write {n_para} paragraph(s) of prose commentary on the manuscript's presentation and clarity. Address this to the editor, without bullet points or numbered lists.
+Your task is to write prose commentary on the manuscript's presentation and clarity. Keep this under 200 words. Address this to the editor, without bullet points or numbered lists.
 
 Consider the following as guidance, but only write about points that genuinely apply to this manuscript:
 
@@ -344,7 +344,6 @@ def analyze_structure(doi: str, client: Optional[GeminiClient] = None, uploaded_
 
     system_prompt = STRUCTURE_REVIEWER_PROMPT.format(
         n_pages=n_pages,
-        n_para=n_para,
     )
 
     # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.

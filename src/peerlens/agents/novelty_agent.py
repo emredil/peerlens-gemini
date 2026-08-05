@@ -218,7 +218,7 @@ addressed to the editor. Cover the following in a natural flow:
    or overlaps with prior work (the claimed contribution is already
    present in the literature).
 
-Keep the assessment to 3 to 5 short paragraphs. Do not use bullet points
+Keep the assessment under 200 words. Do not use bullet points
 or numbered lists in your output. Do not include any metadata such as
 confidence scores, agent names, or JSON. Write the assessment as you
 would in a real referee report.

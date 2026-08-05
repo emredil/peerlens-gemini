@@ -230,7 +230,7 @@ You are given:
 - The manuscript is approximately {n_pages} pages long
 - The paper types: {paper_types} (for example, theoretical, experimental, computational)
 
-Your task is to write {n_para} paragraph(s) of prose commentary on the manuscript's reproducibility, addressed to the editor. No bullet points, no numbered lists.
+Your task is to write prose commentary on the manuscript's reproducibility, addressed to the editor. Keep this under 200 words. No bullet points, no numbered lists.
 
 Consider the following as guidance, but only write about points that genuinely apply to this manuscript in its field:
 
@@ -408,7 +408,6 @@ def analyze_reproducibility(doi: str, client: Optional[GeminiClient] = None, upl
         subdomain=subdomain or "unknown",
         n_pages=n_pages,
         paper_types=", ".join(paper_types) if paper_types else "unspecified",
-        n_para=n_para,
     )
 
     # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.

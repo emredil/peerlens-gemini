@@ -436,9 +436,9 @@ Your task has two parts. Write each in flowing prose, addressed to the editor, w
 
 PART 1: OVERALL STRENGTHS AND WEAKNESSES
 
-First, write {n_strengths_para} paragraph(s) on the manuscript's overall strengths. Focus on the substantive contributions: what makes this paper worth publishing, what does it get right technically, what is its most valuable aspect for readers in your field.
+First, write the manuscript's overall strengths. Keep this under 200 words. Focus on the substantive contributions: what makes this paper worth publishing, what does it get right technically, what is its most valuable aspect for readers in your field.
 
-Then write {n_weaknesses_para} paragraph(s) on the manuscript's overall weaknesses. Focus on the substantive concerns: what technical or methodological problems does it have, what claims are insufficiently supported, what would you require the authors to address before recommending acceptance.
+Then write the manuscript's overall weaknesses. Keep this under 200 words. Focus on the substantive concerns: what technical or methodological problems does it have, what claims are insufficiently supported, what would you require the authors to address before recommending acceptance.
 
 Separate the two with a clear marker line:
 
@@ -454,7 +454,7 @@ After the weaknesses, write another marker line:
 
 ===COMMENTARY===
 
-Then write {n_commentary_para} paragraph(s) of detailed commentary on specific sections or claims of the manuscript. Reference specific equations, figures, or sections by number where appropriate. This is where you point out technical issues at the level of "in Section 3.2, the derivation of Eq. 14 assumes X, but the authors have not justified this assumption." Write as a technically engaged referee would.
+Then write detailed commentary on specific sections or claims of the manuscript. Keep this under 200 words. Reference specific equations, figures, or sections by number where appropriate. This is where you point out technical issues at the level of "in Section 3.2, the derivation of Eq. 14 assumes X, but the authors have not justified this assumption." Write as a technically engaged referee would.
 
 At the very end, on a separate line, write your overall recommendation exactly in one of these formats (pick one):
 
@@ -667,9 +667,6 @@ def analyze_domain(doi: str, client: Optional[GeminiClient] = None, uploaded_fil
         persona_description=persona,
         subdomain=subdomain,
         n_pages=n_pages,
-        n_strengths_para=n_strengths_para,
-        n_weaknesses_para=n_weaknesses_para,
-        n_commentary_para=n_commentary_para,
     )
 
     # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.

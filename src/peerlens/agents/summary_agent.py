@@ -24,7 +24,7 @@ class SummaryReport:
     output_tokens: int = 0
 
 
-SUMMARY_PROMPT = """You are writing a plain summary of a scientific manuscript for a journal editor. The editor needs to know, in two or three short paragraphs, what this paper is about, so that the editor can make a first-pass decision about whether to send it out for detailed review.
+SUMMARY_PROMPT = """You are writing a plain summary of a scientific manuscript for a journal editor. The editor needs to know what this paper is about, so that the editor can make a first-pass decision about whether to send it out for detailed review.
 
 You are given:
 - The manuscript itself (attached as PDF)
@@ -32,7 +32,7 @@ You are given:
 - The paper's field: <<field>>
 - The paper's subdomain: <<subdomain>>
 
-Write <<n_para>> short paragraph(s) covering:
+Cover the following in flowing prose. Keep the summary under 200 words:
 
 1. What problem does the paper address, and why does it matter within its subdomain?
 2. What is the paper's main contribution or result?
@@ -69,22 +69,13 @@ def analyze_summary(
         if subs:
             subdomain = subs[0]
 
-    # Paragraph budget by paper length.
     n_pages = parsed.get("n_pages", 0) or 10
-    if n_pages < 10:
-        n_para = 2
-    elif n_pages < 25:
-        n_para = 2
-    else:
-        n_para = 3
-    report.n_paragraphs = n_para
 
     system_prompt = (
         SUMMARY_PROMPT
         .replace("<<n_pages>>", str(n_pages))
         .replace("<<field>>", field)
         .replace("<<subdomain>>", subdomain)
-        .replace("<<n_para>>", str(n_para))
     )
 
     # PDF handling: prefer uploaded_file (cached), fall back to inline bytes.
@@ -94,7 +85,7 @@ def analyze_summary(
         pdf_bytes = pdf_path.read_bytes() if pdf_path.exists() else None
 
     user_prose = (
-        f"Please write the {n_para}-paragraph summary of this "
+        f"Please write the summary of this "
         f"{field} manuscript ({subdomain}, {n_pages} pages) as instructed."
     )
 
