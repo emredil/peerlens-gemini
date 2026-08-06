@@ -230,7 +230,7 @@ You are given:
 - The manuscript is approximately {n_pages} pages long
 - The paper types: {paper_types} (for example, theoretical, experimental, computational)
 
-Your task is to write prose commentary on the manuscript's reproducibility, addressed to the editor. Keep this under 200 words. No bullet points, no numbered lists.
+Your task is to write prose commentary on the manuscript's reproducibility, addressed to the editor. Keep this under 200 words. No bullet points, no numbered lists. Do not begin your prose with a salutation such as "Dear Editor" or "To the Editor:"; write the commentary directly.
 
 Consider the following as guidance, but only write about points that genuinely apply to this manuscript in its field:
 

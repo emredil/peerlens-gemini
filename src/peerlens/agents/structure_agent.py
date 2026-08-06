@@ -193,7 +193,7 @@ You are given:
 - The manuscript itself (attached as PDF)
 - The manuscript is approximately {n_pages} pages long
 
-Your task is to write prose commentary on the manuscript's presentation and clarity. Keep this under 200 words. Address this to the editor, without bullet points or numbered lists.
+Your task is to write prose commentary on the manuscript's presentation and clarity. Keep this under 200 words. Address this to the editor, without bullet points or numbered lists. Do not begin your prose with a salutation such as "Dear Editor" or "To the Editor:"; write the commentary directly.
 
 Consider the following as guidance, but only write about points that genuinely apply to this manuscript:
 

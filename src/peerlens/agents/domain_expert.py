@@ -433,7 +433,7 @@ You are given:
 - The subdomain classification: {subdomain}
 - The manuscript is approximately {n_pages} pages long
 
-Your task has two parts. Write each in flowing prose, addressed to the editor, without bullet points or numbered lists.
+Your task has two parts. Write each in flowing prose, addressed to the editor, without bullet points or numbered lists. Do not begin your prose with a salutation such as "Dear Editor" or "To the Editor:"; write the commentary directly.
 
 PART 1: OVERALL STRENGTHS AND WEAKNESSES
 

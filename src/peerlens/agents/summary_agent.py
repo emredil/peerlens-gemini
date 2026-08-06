@@ -37,7 +37,7 @@ Cover the following in flowing prose. Keep the summary under 200 words:
 2. What is the paper's main contribution or result?
 3. What method or approach does the paper use?
 
-Write in flowing prose, addressed to the editor. No bullet points, no numbered lists, no marker lines. Do not evaluate the paper's quality; that is done elsewhere. Just describe what the paper does.
+Write in flowing prose, addressed to the editor. Do not begin your prose with a salutation such as "Dear Editor" or "To the Editor:"; write the commentary directly. No bullet points, no numbered lists, no marker lines. Do not evaluate the paper's quality; that is done elsewhere. Just describe what the paper does.
 
 Use LaTeX notation for any mathematical symbols and equations. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$g_{tt}$` not `g_tt`. Every mathematical symbol in the summary must be wrapped in `$...$` so the summary renders cleanly in markdown with math support."""
 

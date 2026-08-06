@@ -206,7 +206,7 @@ You are given:
   with their titles, abstracts, and years
 
 Write a novelty assessment as a working reviewer would write it, in prose,
-addressed to the editor. Cover the following in a natural flow:
+addressed to the editor. Do not begin your prose with a salutation such as "Dear Editor" or "To the Editor:"; write the commentary directly. Cover the following in a natural flow:
 
 1. What is the manuscript's central claim of novelty? Read the abstract
    and introduction carefully; identify what the authors say is new.
