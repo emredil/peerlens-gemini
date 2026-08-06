@@ -652,24 +652,7 @@ def analyze_domain(doi: str, client: Optional[GeminiClient] = None, uploaded_fil
         persona = DEFAULT_UNIVERSAL["persona"]
     report.persona = persona
 
-    # Compute page-count-adaptive paragraph counts.
     n_pages = parsed.get("n_pages", 0) or 10
-    if n_pages < 10:
-        n_strengths_para = 1
-        n_weaknesses_para = 1
-        n_commentary_para = 1
-    elif n_pages < 20:
-        n_strengths_para = 2
-        n_weaknesses_para = 2
-        n_commentary_para = 2
-    elif n_pages < 30:
-        n_strengths_para = 2
-        n_weaknesses_para = 2
-        n_commentary_para = 3
-    else:
-        n_strengths_para = 3
-        n_weaknesses_para = 3
-        n_commentary_para = 4
 
     system_prompt = DOMAIN_REVIEWER_PROMPT.format(
         persona_description=persona,

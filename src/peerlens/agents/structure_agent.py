@@ -333,14 +333,7 @@ def analyze_structure(doi: str, client: Optional[GeminiClient] = None, uploaded_
         return report
     parsed = json.loads(parsed_path.read_text())
 
-    # Determine paragraph budget from paper length.
     n_pages = parsed.get("n_pages", 0) or 10
-    if n_pages < 10:
-        n_para = 1
-    elif n_pages < 25:
-        n_para = 1
-    else:
-        n_para = 2
 
     system_prompt = STRUCTURE_REVIEWER_PROMPT.format(
         n_pages=n_pages,

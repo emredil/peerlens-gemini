@@ -389,14 +389,7 @@ def analyze_reproducibility(doi: str, client: Optional[GeminiClient] = None, upl
     if client is None:
         client = GeminiClient()
 
-    # Determine paragraph budget from paper length.
     n_pages = parsed.get("n_pages", 0) or 10
-    if n_pages < 10:
-        n_para = 1
-    elif n_pages < 25:
-        n_para = 1
-    else:
-        n_para = 2
 
     subdomain = ""
     subdomains_list = (classification or {}).get("subdomains", [])
