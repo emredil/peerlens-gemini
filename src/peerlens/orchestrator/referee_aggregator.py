@@ -530,10 +530,15 @@ def _render_recommendation_section(report: RefereeReport) -> list[str]:
     lines.append(f"**{score_verdict}** — score {score}/100")
     if domain_verdict:
         lines.append(f"**Domain expert verdict:** {domain_verdict}")
-    reason = (report.overall_reason or "").strip()
-    if reason:
+    # Prefer domain expert's verdict rationale over the legacy triage reason.
+    rationale = ""
+    if report.domain_json:
+        rationale = (report.domain_json.get("verdict_rationale") or "").strip()
+    if not rationale:
+        rationale = (report.overall_reason or "").strip()
+    if rationale:
         lines.append("")
-        lines.append(f"_{reason}_")
+        lines.append(f"_{rationale}_")
     lines.append("")
     return lines
 

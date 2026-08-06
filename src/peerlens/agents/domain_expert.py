@@ -48,6 +48,7 @@ class DomainReport:
     weaknesses_narrative: str = ""
     commentary_narrative: str = ""
     verdict: str = ""  # "accept" | "minor revision" | "major revision" | "reject"
+    verdict_rationale: str = ""
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
@@ -465,6 +466,13 @@ Domain verdict: reject
 
 Base your verdict on the balance of strengths and weaknesses.
 
+Immediately after the verdict line, on the next line, write a 1-2 sentence rationale for the verdict, prefixed with "Rationale:". For example:
+
+Domain verdict: minor revision
+Rationale: The framework is sound and the results are novel, but the restriction to non-spinning primaries and the omission of local drag forces limit immediate astrophysical applicability.
+
+FORMAT REQUIREMENT: Do not write any prose before the "===STRENGTHS===" marker. Start your response with "===STRENGTHS===" on its own line. Do not repeat the strengths content elsewhere; write it once, under the marker.
+
 Use LaTeX notation for any mathematical symbols and equations in your prose. Write `$\\varepsilon$` not `ε`, `$\\mu$` not `µ`, `$\\pi$` not `π`. Every mathematical symbol must be wrapped in `$...$` so the report renders cleanly in markdown with math support."""
 
 
@@ -688,48 +696,86 @@ def analyze_domain(doi: str, client: Optional[GeminiClient] = None, uploaded_fil
         uploaded_file=uploaded_file,
     )
 
-    # Parse the three-section marker-delimited output.
+    # Parse the marker-delimited output with preamble fallback.
+    # Gemini occasionally skips the ===STRENGTHS=== marker and writes the
+    # strengths content as an unmarked preamble. We collect preamble text
+    # into strengths by default; if ===STRENGTHS=== is encountered, that
+    # marked content overrides the preamble. If a subsequent marker is
+    # encountered without any preceding strengths marker, the preamble is
+    # committed to strengths.
     strengths = ""
     weaknesses = ""
     commentary = ""
     verdict = ""
+    verdict_rationale = ""
 
-    current_section = None
+    current_section = "preamble"
+    seen_strengths_marker = False
     buf: list[str] = []
     for line in (text or "").splitlines():
         stripped = line.strip()
         if stripped.startswith("===STRENGTHS==="):
+            # Discard preamble content since the model gave us an explicit
+            # strengths section.
             current_section = "strengths"
+            seen_strengths_marker = True
             buf = []
             continue
         if stripped.startswith("===WEAKNESSES==="):
-            strengths = "\n".join(buf).strip()
+            content = "\n".join(buf).strip()
+            if current_section in ("preamble", "strengths"):
+                # If we never saw ===STRENGTHS===, promote preamble to strengths.
+                strengths = content
             current_section = "weaknesses"
             buf = []
             continue
         if stripped.startswith("===COMMENTARY==="):
-            weaknesses = "\n".join(buf).strip()
+            content = "\n".join(buf).strip()
+            if current_section == "weaknesses":
+                weaknesses = content
+            elif current_section in ("preamble", "strengths") and not seen_strengths_marker:
+                strengths = content
             current_section = "commentary"
             buf = []
             continue
         if stripped.lower().startswith("domain verdict:"):
+            content = "\n".join(buf).strip()
             if current_section == "commentary":
-                commentary = "\n".join(buf).strip()
+                commentary = content
+            elif current_section == "weaknesses":
+                weaknesses = content
+            elif current_section in ("preamble", "strengths") and not seen_strengths_marker:
+                strengths = content
             verdict = stripped.split(":", 1)[1].strip().lower()
-            current_section = None
+            current_section = "verdict_rationale"
             buf = []
             continue
-        if current_section is not None:
-            buf.append(line)
+        if stripped.lower().startswith("rationale:") and current_section == "verdict_rationale":
+            verdict_rationale = stripped.split(":", 1)[1].strip()
+            # Keep accumulating in case rationale spans multiple lines below.
+            buf = []
+            current_section = "verdict_rationale_continued"
+            continue
+        buf.append(line)
 
-    # Flush any remaining buffer if verdict line was missing.
-    if current_section == "commentary" and not commentary:
-        commentary = "\n".join(buf).strip()
+    # Flush any remaining buffer to the appropriate section.
+    trailing = "\n".join(buf).strip()
+    if trailing:
+        if current_section == "verdict_rationale_continued":
+            # Continuation of rationale on subsequent lines.
+            verdict_rationale = (verdict_rationale + " " + trailing).strip() if verdict_rationale else trailing
+        elif current_section == "commentary" and not commentary:
+            commentary = trailing
+        elif current_section == "weaknesses" and not weaknesses:
+            weaknesses = trailing
+        elif current_section in ("preamble", "strengths") and not seen_strengths_marker and not strengths:
+            strengths = trailing
 
     report.strengths_narrative = strengths
     report.weaknesses_narrative = weaknesses
     report.commentary_narrative = commentary
     report.verdict = verdict
+    report.verdict_rationale = verdict_rationale
 
     report.findings = []
     report.n_findings = 0
