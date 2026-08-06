@@ -18,7 +18,6 @@ from peerlens.gemini_client import GeminiClient
 class SummaryReport:
     doi_label: str
     narrative: str = ""
-    n_paragraphs: int = 0
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0

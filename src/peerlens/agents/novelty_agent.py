@@ -146,7 +146,15 @@ def gather_related(doi: str, k_corpus: int = 8, k_scholar: int = 15) -> list[Rel
 
 
 def _extract_year(ref: str) -> Optional[int]:
-    m = re.search(r"\b(19|20)\d{2}\b", ref)
+    # Strip arXiv identifiers (e.g. "arXiv:2093.05231" or "1903.03686")
+    # before scanning for a year, because arXiv IDs share the same
+    # 4-digit prefix pattern as years and would otherwise be treated
+    # as reference years.
+    cleaned = re.sub(r"arXiv[:\s]*\d{4}\.\d{4,5}", " ", ref, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b\d{4}\.\d{4,5}\b", " ", cleaned)
+    # Match a 4-digit year that is not followed by a dot+digits (which
+    # would indicate an arXiv-style identifier we did not catch above).
+    m = re.search(r"\b(19|20)\d{2}\b(?!\.\d)", cleaned)
     return int(m.group(0)) if m else None
 
 
@@ -179,7 +187,9 @@ def annotate_citations(paper_refs: list[str], related: list[RelatedWork]) -> Non
 
 def reference_year_stats(paper_refs: list[str]) -> tuple[Optional[int], Optional[int]]:
     years = [_extract_year(r) for r in paper_refs]
-    years = [y for y in years if y is not None and 1900 <= y <= 2100]
+    from datetime import date
+    upper = date.today().year + 1
+    years = [y for y in years if y is not None and 1900 <= y <= upper]
     if not years:
         return None, None
     years.sort()
@@ -421,7 +431,7 @@ the system prompt. Zero findings is acceptable if coverage is thorough."""
         model=model_name,
         system=NOVELTY_REVIEWER_PROMPT,
         user=user_prose,
-        max_output_tokens=3000,
+        max_output_tokens=8000,
         temperature=0.3,
         pdf_bytes=pdf_bytes,
         uploaded_file=uploaded_file,

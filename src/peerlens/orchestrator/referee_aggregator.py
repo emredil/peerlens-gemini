@@ -683,59 +683,20 @@ def _render_minor_comments_section(report: RefereeReport) -> list[str]:
 
 
 def _render_technical_details_section(report: RefereeReport) -> list[str]:
+    """Minimal metadata footer: model, field, reference year median."""
     lines: list[str] = ["## Technical details", ""]
+
+    lines.append("- **Model:** gemini-pro-latest")
 
     subdomain = ""
     if report.domain_json:
         subdomain = report.domain_json.get("subdomain_used", "") or ""
     lines.append(f"- **Field:** {report.field_top}" + (f", subdomain: {subdomain}" if subdomain else ""))
 
-    claims = report.claims_json or {}
-    n_claims = claims.get("n_claims_total") or len(claims.get("claims") or [])
-    n_symbols = len(claims.get("symbols") or [])
-    lines.append(f"- **Extracted claims:** {n_claims} claim(s), {n_symbols} symbol(s)")
-
     nov = report.novelty_json or {}
-    n_related = nov.get("n_related_retrieved") or 0
-    n_corpus = nov.get("n_corpus_matches") or 0
-    n_scholar = nov.get("n_scholar_matches") or 0
-    lines.append(f"- **Similar papers retrieved:** {n_related} (corpus: {n_corpus}, scholar: {n_scholar})")
-
     ref_median = nov.get("reference_year_median")
-    ref_max = nov.get("reference_year_max")
-    if ref_median or ref_max:
-        lines.append(f"- **Reference years:** median {ref_median}, most recent {ref_max}")
-
-    math = report.math_json or {}
-    n_dim = math.get("n_dimensional_findings") or math.get("dimensional_checks") or 0
-    lines.append(f"- **Dimensional checks:** {n_dim} finding(s)")
-
-    verified = math.get("n_verified") or 0
-    refuted  = math.get("n_refuted")  or 0
-    unable   = math.get("n_unable")   or 0
-    lines.append(f"- **Symbolic verification (SymPy):** {verified} verified / {refuted} refuted / {unable} unable")
-
-    g_ver = math.get("n_gemini_verified")
-    g_ref = math.get("n_gemini_refuted")
-    g_una = math.get("n_gemini_unable")
-    if g_ver is not None or g_ref is not None or g_una is not None:
-        lines.append(f"- **Symbolic verification (Gemini judgment):** {g_ver or 0} verified / {g_ref or 0} refuted / {g_una or 0} unable")
-
-    agreement = math.get("agreement_sympy_gemini")
-    if agreement is not None:
-        lines.append(f"- **Agreement between SymPy and Gemini:** {agreement}")
-
-    lines.append(f"- **Model:** gemini-pro-latest")
-
-    # Token totals across agents
-    total_in = total_out = 0
-    for j in (report.summary_json, report.novelty_json, report.structure_json,
-              report.domain_json, report.reproducibility_json, report.claims_json):
-        if isinstance(j, dict):
-            total_in  += int(j.get("input_tokens") or 0)
-            total_out += int(j.get("output_tokens") or 0)
-    if total_in or total_out:
-        lines.append(f"- **Total tokens:** {total_in} in / {total_out} out")
+    if ref_median:
+        lines.append(f"- **References:** median year {ref_median}")
 
     lines.append("")
     return lines

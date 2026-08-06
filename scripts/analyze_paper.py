@@ -254,7 +254,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
     else:
         rep = analyze_summary(doi, client=client, uploaded_file=uploaded_pdf)
         save_sum(rep)
-        console.print(f"       {rep.n_paragraphs} paragraphs, {rep.output_tokens} out tokens")
+        console.print(f"       {rep.output_tokens} out tokens")
 
     console.print("[cyan]10/11[/cyan] Math aggregation")
     aggregate_and_render(doi)
