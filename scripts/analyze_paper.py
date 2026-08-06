@@ -262,11 +262,20 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
     console.print("[cyan]11/11[/cyan] Full referee section + triage score")
     json_path, md_path = aggregate_and_render_full(doi)
 
-    triage_path = get_path("processed_data") / "triage_scores" / f"{doi}.json"
-    triage = json.loads(triage_path.read_text()) if triage_path.exists() else {}
-    verdict = triage.get("verdict", "unknown")
-    score = triage.get("score", 0)
-    color = {"priority": "green", "standard": "yellow", "reject": "red"}.get(verdict, "white")
+    # Read verdict from domain expert instead of legacy triage score.
+    domain_path = get_path("processed_data") / "domain_reports" / f"{doi}.json"
+    domain_verdict = "unknown"
+    if domain_path.exists():
+        try:
+            domain_verdict = (json.loads(domain_path.read_text()).get("verdict") or "unknown").strip().lower()
+        except json.JSONDecodeError:
+            pass
+    color = {
+        "accept": "green",
+        "minor revision": "yellow",
+        "major revision": "orange3",
+        "reject": "red",
+    }.get(domain_verdict, "white")
 
     # Optional LLM-authorship policy check (opt-in; does not affect score).
     llm_verdict = None
@@ -289,7 +298,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
             aggregate_and_render_full(doi)
 
     console.rule("[bold green]Done[/bold green]")
-    console.print(f"Triage:   [{color}]{verdict.upper()}[/{color}]  (score {score}/100)")
+    console.print(f"Verdict:  [{color}]{domain_verdict.upper()}[/{color}]")
     if llm_verdict:
         llm_color = {"likely_human": "green", "unclear": "white",
                      "possibly_llm": "yellow", "likely_llm": "red"}.get(llm_verdict, "white")

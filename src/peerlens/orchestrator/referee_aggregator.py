@@ -520,17 +520,24 @@ def _score_to_verdict(score: int) -> str:
 
 
 def _render_recommendation_section(report: RefereeReport) -> list[str]:
+    """Domain expert's verdict + rationale. No numeric score.
+
+    The legacy triage_score is intentionally not rendered: the numeric
+    score never gained editorial meaning (it consistently maxed out at
+    100/100 even for papers with critical math findings), and the
+    domain-expert verdict combined with a 1-2 sentence rationale is
+    what an editor actually acts on.
+    """
     lines: list[str] = ["## Recommendation", ""]
-    score = int(report.triage_score)
-    score_verdict = _score_to_verdict(score)
     domain_verdict = ""
     if report.domain_json:
         domain_verdict = (report.domain_json.get("verdict") or "").strip()
+    if not domain_verdict:
+        domain_verdict = "insufficient data"
+    # Capitalise first letter for the header line, keep rest as written.
+    display = domain_verdict[:1].upper() + domain_verdict[1:]
+    lines.append(f"**{display}**")
 
-    lines.append(f"**{score_verdict}** — score {score}/100")
-    if domain_verdict:
-        lines.append(f"**Domain expert verdict:** {domain_verdict}")
-    # Prefer domain expert's verdict rationale over the legacy triage reason.
     rationale = ""
     if report.domain_json:
         rationale = (report.domain_json.get("verdict_rationale") or "").strip()
