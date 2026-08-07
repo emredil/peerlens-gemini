@@ -283,8 +283,12 @@ async function refreshJobs() {
         <span>${j.doi_label} <span style="color:#999">(${j.source}: ${j.input_ref})</span></span>
         <span>${verdict}</span>
         <span>${score}</span>
-        <span>${j.error ? '<span style="color:#a00000" title="'+j.error.replace(/"/g,'&quot;')+'">error</span>' : ''}</span>
+        <span></span>
       </div>`;
+      if (j.error) {
+        const errText = j.error.length > 400 ? j.error.slice(-400) : j.error;
+        html += `<div style="grid-column: 1 / -1; margin: -0.35rem 0 0.5rem 1.5rem; padding: 0.5rem 0.75rem; background:#fde2e2; border-left: 3px solid #a00000; font-family: ui-monospace, monospace; font-size: 0.8em; color: #6a0000; white-space: pre-wrap; word-break: break-word;">${errText.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>`;
+      }
     }
     container.innerHTML = html;
   } catch (e) {

@@ -93,7 +93,7 @@ def analyze_summary(
         model=model_name,
         system=system_prompt,
         user=user_prose,
-        max_output_tokens=8000,
+        max_output_tokens=16000,
         temperature=0.3,
         pdf_bytes=pdf_bytes,
         uploaded_file=uploaded_file,

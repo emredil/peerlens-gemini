@@ -122,7 +122,7 @@ def analyze_novelty(
     config = types.GenerateContentConfig(
         system_instruction=NOVELTY_REVIEWER_PROMPT,
         temperature=0.3,
-        max_output_tokens=8000,
+        max_output_tokens=16000,
         tools=[types.Tool(google_search=types.GoogleSearch())],
     )
 

@@ -1,7 +1,8 @@
-"""Generate an HTML editorial dashboard from all triage scores on disk.
+"""Generate an HTML editorial dashboard from all domain-expert verdicts on disk.
 
-Renders one HTML page with three sections (priority / standard / reject),
-each a sortable table, and a link to the per-paper markdown report.
+Renders one HTML page with four sections (accept / minor revision /
+major revision / reject), each a sortable table, and a link to the
+per-paper markdown report.
 """
 import json
 import sys
@@ -13,15 +14,38 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from peerlens.settings import get_path
 
 
-def load_all_triages() -> list[dict]:
-    scores_dir = get_path("processed_data") / "triage_scores"
+VERDICT_ORDER = ["accept", "minor revision", "major revision", "reject", "unknown"]
+
+VERDICT_META = {
+    "accept":          ("Accept",          "#0a7c00"),
+    "minor revision":  ("Minor revision",  "#a06000"),
+    "major revision":  ("Major revision",  "#c05400"),
+    "reject":          ("Reject",          "#a00000"),
+    "unknown":         ("Unclassified",    "#555555"),
+}
+
+
+def load_all_verdicts() -> list[dict]:
+    """Read domain_reports/*.json for every paper on disk, one row each."""
+    dom_dir = get_path("processed_data") / "domain_reports"
     out = []
-    for p in sorted(scores_dir.glob("*.json")):
+    for p in sorted(dom_dir.glob("*.json")):
         try:
             d = json.loads(p.read_text())
-            out.append(d)
         except Exception:
             continue
+        doi = d.get("doi_label") or p.stem
+        verdict = (d.get("verdict") or "").strip().lower() or "unknown"
+        if verdict not in VERDICT_META:
+            verdict = "unknown"
+        rationale = (d.get("verdict_rationale") or "").strip()
+        out.append({
+            "doi_label": doi,
+            "verdict": verdict,
+            "rationale": rationale,
+            "subdomain": d.get("subdomain_used", "") or "",
+            "persona": d.get("persona", "") or "",
+        })
     return out
 
 
@@ -46,8 +70,6 @@ def load_classification(doi: str) -> dict:
 
 
 def load_policy(doi: str) -> dict:
-    """Return llm_detection_reports/{doi}.json if the editor opted in for
-    this paper, otherwise {}."""
     path = get_path("processed_data") / "llm_detection_reports" / f"{doi}.json"
     if not path.exists():
         return {}
@@ -58,11 +80,6 @@ def load_policy(doi: str) -> dict:
 
 
 def _policy_badge(policy: dict) -> str:
-    """Render an inline pill showing the LLM-authorship verdict + confidence.
-
-    Returns an empty string when policy is missing (no opt-in for this paper),
-    so the row layout stays identical for papers without a policy check.
-    """
     if not policy:
         return ""
     verdict = policy.get("verdict", "unclear")
@@ -78,150 +95,113 @@ def _policy_badge(policy: dict) -> str:
     }
     bg, fg, label = palette.get(verdict, ("#f0f0f0", "#555555", str(verdict).upper()))
     return (
-        f"<div style='display:inline-block; margin-top:6px; padding:2px 8px; "
-        f"background:{bg}; color:{fg}; border-radius:10px; font-size:0.75em; "
-        f"font-weight:600; letter-spacing:0.02em;'>"
-        f"{label} <span style='font-weight:400; opacity:0.75;'>"
-        f"({conf:.2f})</span></div>"
+        f'<span style="display:inline-block; padding:2px 8px; margin-left:6px; '
+        f'background:{bg}; color:{fg}; border-radius:10px; font-size:0.75em; '
+        f'font-weight:600;">{escape(label)} · {conf:.0%}</span>'
     )
 
 
-BUCKETS = [
-    ("priority", "Priority (score ≥ 80)", "#0a7c00"),
-    ("standard", "Standard (40–79)", "#a06000"),
-    ("reject",   "Reject candidates (score < 40)", "#a00000"),
-]
-
-
-HTML_HEAD = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>PeerLens — Editorial triage dashboard</title>
-<style>
-  body { font-family: -apple-system, sans-serif; margin: 40px auto; max-width: 1150px;
-         color: #222; background: #fafafa; }
-  h1 { margin-bottom: 0; }
-  .meta { color: #666; margin-top: 4px; margin-bottom: 30px; }
-  h2 { padding: 8px 12px; color: white; border-radius: 4px; margin-top: 40px; }
-  table { border-collapse: collapse; width: 100%; margin-top: 10px; background: white;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-  th, td { padding: 8px 10px; border-bottom: 1px solid #eee; text-align: left; vertical-align: top; }
-  th { background: #f2f2f2; }
-  td.score { font-family: 'SF Mono', 'Menlo', monospace; font-weight: 600; text-align: right; }
-  td.doi { font-family: 'SF Mono', 'Menlo', monospace; font-size: 0.9em; }
-  ul.topneg { margin: 0; padding-left: 18px; font-size: 0.85em; color: #444; }
-  ul.topneg li { margin-bottom: 3px; }
-  .weight { font-family: monospace; color: #a00000; font-weight: 600; }
-  .empty { color: #999; padding: 10px; }
-  .subdomain { font-size: 0.8em; color: #666; }
-  a.md-link { text-decoration: none; color: #005ea6; }
-  a.md-link:hover { text-decoration: underline; }
-</style>
-</head>
-<body>
-"""
-
-HTML_TAIL = """
-</body>
-</html>
-"""
-
-
-def render_row(t: dict) -> str:
-    doi = t.get("doi_label", "?")
-    score = t.get("score", 0)
-    title = load_parsed_title(doi)
-    policy = load_policy(doi)
-    policy_badge_html = _policy_badge(policy)
+def _row(entry: dict) -> str:
+    doi = entry["doi_label"]
+    title = load_parsed_title(doi) or "(untitled)"
     cls = load_classification(doi)
-    subs = ", ".join(cls.get("subdomains", []) or [])
+    field = cls.get("field_top", "")
+    subdomain = entry["subdomain"] or (cls.get("subdomains", [""])[0] if cls.get("subdomains") else "")
+    persona = entry["persona"]
+    rationale = entry["rationale"]
 
-    top_neg_html = ""
-    top = t.get("top_negative", [])
-    if top:
-        items = []
-        for c in top:
-            w = c.get("weight", 0)
-            src = c.get("source", "")
-            kind = c.get("kind", "")
-            sev = c.get("severity", "")
-            loc = c.get("location", "") or "—"
-            ev = c.get("evidence_short", "")
-            items.append(
-                f"<li><span class='weight'>{w:+d}</span> "
-                f"<b>{escape(src)}.{escape(kind)}</b> [{escape(sev)}] @ {escape(loc)}"
-                f"<br><span style='color:#555'>{escape(ev)}</span></li>"
-            )
-        top_neg_html = "<ul class='topneg'>" + "".join(items) + "</ul>"
+    policy_badge = _policy_badge(load_policy(doi))
 
-    md_rel = f"referee_sections/{doi}_full.md"
+    report_link = f'referee_sections/{doi}_full.md'
+
+    field_tag = f'<span class="tag">{escape(field)}</span>' if field else ""
+    sub_tag = f'<span class="tag muted">{escape(subdomain)}</span>' if subdomain else ""
+    rationale_html = f'<div class="rationale">{escape(rationale)}</div>' if rationale else ''
 
     return (
-        "<tr>"
-        f"<td class='score'>{score}</td>"
-        f"<td class='doi'>{escape(doi)}<br><span class='subdomain'>{escape(subs)}</span>"
-        f"{('<br>' + policy_badge_html) if policy_badge_html else ''}</td>"
-        f"<td>{escape(title)}<br>{top_neg_html}</td>"
-        f"<td><a class='md-link' href='{md_rel}'>report.md</a></td>"
-        "</tr>"
+        f'<tr>'
+        f'<td class="title-cell">'
+        f'  <a href="{escape(report_link)}">{escape(title)}</a>{policy_badge}'
+        f'  <div class="doi">{escape(doi)}</div>'
+        f'  {rationale_html}'
+        f'</td>'
+        f'<td>{field_tag} {sub_tag}</td>'
+        f'<td class="persona">{escape(persona)}</td>'
+        f'</tr>'
     )
 
 
-def build_dashboard(out_path: Path) -> Path:
-    triages = load_all_triages()
-    triages.sort(key=lambda t: -t.get("score", 0))
-
-    n_total = len(triages)
-    n_priority = sum(1 for t in triages if t.get("verdict") == "priority")
-    n_standard = sum(1 for t in triages if t.get("verdict") == "standard")
-    n_reject = sum(1 for t in triages if t.get("verdict") == "reject")
-    n_insufficient = n_total - n_priority - n_standard - n_reject
-
-    parts = [HTML_HEAD]
-    parts.append(f"<h1>PeerLens — Editorial triage</h1>")
-    parts.append(
-        f"<p class='meta'>{n_total} papers processed. "
-        f"Priority: {n_priority} · Standard: {n_standard} · Reject: {n_reject}"
-        + (f" · Insufficient: {n_insufficient}" if n_insufficient else "") + "</p>"
+def _section(verdict: str, entries: list[dict]) -> str:
+    if not entries:
+        return ""
+    label, color = VERDICT_META[verdict]
+    rows = "\n".join(_row(e) for e in entries)
+    return (
+        f'<section>'
+        f'<h2 style="color:{color}">{label} <span class="count">— {len(entries)}</span></h2>'
+        f'<table>'
+        f'  <thead><tr><th>Paper</th><th>Field</th><th>Persona</th></tr></thead>'
+        f'  <tbody>{rows}</tbody>'
+        f'</table>'
+        f'</section>'
     )
 
-    for verdict_key, verdict_label, color in BUCKETS:
-        bucket = [t for t in triages if t.get("verdict") == verdict_key]
-        parts.append(f"<h2 style='background:{color}'>{escape(verdict_label)} — {len(bucket)}</h2>")
-        if not bucket:
-            parts.append("<div class='empty'>Empty.</div>")
-            continue
-        parts.append("<table>")
-        parts.append("<tr><th style='width:70px'>Score</th>"
-                     "<th style='width:220px'>DOI / subdomain</th>"
-                     "<th>Title &amp; top signals</th>"
-                     "<th style='width:90px'>Report</th></tr>")
-        for t in bucket:
-            parts.append(render_row(t))
-        parts.append("</table>")
 
-    if n_insufficient:
-        bucket = [t for t in triages
-                  if t.get("verdict") not in ("priority", "standard", "reject")]
-        parts.append(f"<h2 style='background:#555'>Insufficient data — {len(bucket)}</h2>")
-        parts.append("<table>")
-        parts.append("<tr><th>Score</th><th>DOI</th><th>Title</th><th>Report</th></tr>")
-        for t in bucket:
-            parts.append(render_row(t))
-        parts.append("</table>")
+def build_html(entries: list[dict]) -> str:
+    # Group by verdict
+    buckets: dict[str, list[dict]] = {v: [] for v in VERDICT_ORDER}
+    for e in entries:
+        buckets[e["verdict"]].append(e)
 
-    parts.append(HTML_TAIL)
+    # Sort each bucket by DOI (deterministic ordering)
+    for v in buckets:
+        buckets[v].sort(key=lambda x: x["doi_label"])
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("".join(parts), encoding="utf-8")
-    return out_path
+    header_bits = []
+    for v in VERDICT_ORDER:
+        if buckets[v]:
+            label, _ = VERDICT_META[v]
+            header_bits.append(f"{label}: {len(buckets[v])}")
+    header = " · ".join(header_bits) if header_bits else "No papers processed yet."
+
+    sections = "\n".join(_section(v, buckets[v]) for v in VERDICT_ORDER)
+
+    css = """
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+      h1 { margin-bottom: 0.25rem; }
+      .summary { color: #555; margin-bottom: 2rem; }
+      section { margin: 2rem 0; }
+      h2 { border-bottom: 2px solid currentColor; padding-bottom: 0.35rem; margin-bottom: 0.75rem; }
+      .count { color: #888; font-weight: normal; font-size: 0.85em; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 0.55rem 0.5rem; vertical-align: top; border-bottom: 1px solid #eee; }
+      th { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; color: #666; }
+      .title-cell a { color: #0a4f9f; text-decoration: none; font-weight: 500; }
+      .title-cell a:hover { text-decoration: underline; }
+      .doi { font-family: ui-monospace, monospace; color: #888; font-size: 0.8em; margin-top: 2px; }
+      .rationale { color: #444; font-size: 0.9em; margin-top: 4px; font-style: italic; }
+      .tag { display: inline-block; padding: 2px 8px; background: #eef; color: #335; border-radius: 10px; font-size: 0.75em; font-weight: 600; }
+      .tag.muted { background: #f0f0f0; color: #666; font-weight: 400; }
+      .persona { font-size: 0.85em; color: #555; }
+    """
+
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>PeerLens editorial dashboard</title>
+<style>{css}</style>
+</head><body>
+<h1>PeerLens editorial dashboard</h1>
+<div class="summary">{escape(header)}</div>
+{sections}
+</body></html>
+"""
 
 
-def main():
+def main() -> None:
+    entries = load_all_verdicts()
+    html = build_html(entries)
     out = get_path("processed_data") / "editorial_dashboard.html"
-    path = build_dashboard(out)
-    print(f"Dashboard written: {path}")
+    out.write_text(html, encoding="utf-8")
+    print(f"Dashboard written: {out}")
 
 
 if __name__ == "__main__":
