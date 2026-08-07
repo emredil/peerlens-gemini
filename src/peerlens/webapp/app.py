@@ -66,7 +66,6 @@ class Job:
     source: str                # "pdf" | "arxiv"
     input_ref: str             # filename or arxiv id
     status: str = "queued"     # queued | running | done | failed
-    score: int | None = None
     verdict: str | None = None
     check_llm: bool = False
     llm_verdict: str | None = None
@@ -131,10 +130,10 @@ def _run_pipeline(job: Job) -> None:
         return
 
     # Read triage result
-    triage_path = get_path("processed_data") / "triage_scores" / f"{job.doi_label}.json"
-    if triage_path.exists():
+    domain_path = get_path("processed_data") / "domain_reports" / f"{job.doi_label}.json"
+    if domain_path.exists():
         try:
-            t = json.loads(triage_path.read_text())
+            t = json.loads(domain_path.read_text())
             llm_verdict = None
             llm_confidence = None
             if job.check_llm:
@@ -148,8 +147,7 @@ def _run_pipeline(job: Job) -> None:
                         pass
             with _JOBS_LOCK:
                 job.status = "done"
-                job.score = t.get("score")
-                job.verdict = t.get("verdict")
+                job.verdict = (t.get("verdict") or "").strip() or None
                 job.llm_verdict = llm_verdict
                 job.llm_confidence = llm_confidence
                 job.finished_at = time.time()
@@ -159,7 +157,7 @@ def _run_pipeline(job: Job) -> None:
 
     with _JOBS_LOCK:
         job.status = "failed"
-        job.error = "pipeline finished but no triage_scores JSON produced"
+        job.error = "pipeline finished but no domain_reports JSON produced"
         job.finished_at = time.time()
 
 
@@ -277,12 +275,12 @@ async function refreshJobs() {
       const verdict = j.status === 'done'
         ? `<span class="${statusClass}">${j.verdict?.toUpperCase() || ''}</span>`
         : `<span class="${statusClass}">${j.status}</span>`;
-      const score = j.score != null ? `${j.score}/100` : '';
+      // score column removed - verdict is enough
       html += `<div class="job-row">
         <span>${new Date(j.created_at*1000).toLocaleTimeString()}</span>
         <span>${j.doi_label} <span style="color:#999">(${j.source}: ${j.input_ref})</span></span>
         <span>${verdict}</span>
-        <span>${score}</span>
+        
         <span></span>
       </div>`;
       if (j.error) {
