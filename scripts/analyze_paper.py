@@ -218,7 +218,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
     else:
         rep = analyze_novelty(doi, client=client, uploaded_file=uploaded_pdf)
         save_nov(rep)
-        console.print(f"       {rep.n_related_retrieved} related, {rep.n_findings} findings")
+        console.print(f"       verdict={rep.verdict!r} ({rep.output_tokens} tokens)")
 
     console.print("[cyan]6/11[/cyan] Structure & narrative")
     str_path = get_path("processed_data") / "structure_reports" / f"{doi}.json"
