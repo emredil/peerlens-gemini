@@ -289,7 +289,7 @@ def run_pipeline(doi: str, pdf_path: Path, *, check_llm: bool = False) -> None:
             rep = analyze_llm_authorship(doi)
             save_llm(rep)
             console.print(f"        verdict={rep.verdict}  confidence={rep.confidence:.2f}  "
-                          f"signals={rep.n_signals} (strong={rep.n_strong}, mod={rep.n_moderate})")
+                          f"verdict={rep.verdict!r} confidence={rep.confidence:.2f}")
         if llm_path.exists():
             llm_data = json.loads(llm_path.read_text())
             llm_verdict = llm_data.get("verdict")
