@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field, asdict
-from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
@@ -47,39 +46,11 @@ class NoveltyReport:
     doi_label: str
     narrative: str = ""
     verdict: str = ""  # free-text label from the prose (e.g. "clearly novel")
-    reference_year_median: Optional[int] = None
-    reference_year_max: Optional[int] = None
     n_findings: int = 0
     findings: list[NoveltyFinding] = field(default_factory=list)
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
-
-
-# ---------------------------------------------------------------------------
-# Reference-year statistics from the manuscript\'s own bibliography
-# ---------------------------------------------------------------------------
-
-def _extract_year(ref: str) -> Optional[int]:
-    # Strip arXiv identifiers (e.g. "arXiv:2093.05231" or "1903.03686")
-    # before scanning for a year, because arXiv IDs share the same
-    # 4-digit prefix pattern as years and would otherwise be treated
-    # as reference years.
-    cleaned = re.sub(r"arXiv[:\s]*\d{4}\.\d{4,5}", " ", ref, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\b\d{4}\.\d{4,5}\b", " ", cleaned)
-    m = re.search(r"\b(19|20)\d{2}\b(?!\.\d)", cleaned)
-    return int(m.group(0)) if m else None
-
-
-def reference_year_stats(paper_refs: list[str]) -> tuple[Optional[int], Optional[int]]:
-    years = [_extract_year(r) for r in paper_refs]
-    upper = date.today().year + 1
-    years = [y for y in years if y is not None and 1900 <= y <= upper]
-    if not years:
-        return None, None
-    years.sort()
-    median = years[len(years) // 2]
-    return median, max(years)
 
 
 # ---------------------------------------------------------------------------
@@ -127,12 +98,6 @@ def analyze_novelty(
     if not parsed_path.exists():
         return report
     parsed = json.loads(parsed_path.read_text())
-
-    # Reference-year statistics from the manuscript\'s own bibliography
-    refs = parsed.get("references", []) or []
-    med_yr, max_yr = reference_year_stats(refs)
-    report.reference_year_median = med_yr
-    report.reference_year_max = max_yr
 
     if types is None:
         # google-genai not importable; leave narrative empty.

@@ -532,11 +532,6 @@ def _render_technical_details_section(report: RefereeReport) -> list[str]:
         subdomain = report.domain_json.get("subdomain_used", "") or ""
     lines.append(f"- **Field:** {report.field_top}" + (f", subdomain: {subdomain}" if subdomain else ""))
 
-    nov = report.novelty_json or {}
-    ref_median = nov.get("reference_year_median")
-    if ref_median:
-        lines.append(f"- **References:** median year {ref_median}")
-
     lines.append("")
     return lines
 def _render_summary_section(summary_json: dict) -> list[str]:
