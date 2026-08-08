@@ -72,7 +72,7 @@ def stage_sympy(doi: str, claims_data: dict, client: Anthropic):
 
 
 def stage_aggregate(doi: str):
-    json_path, md_path = aggregate_and_render(doi)
+    json_path = aggregate_and_render(doi)
     console.print(f"    [green]aggregated →[/green] {md_path.name}")
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from peerlens.orchestrator.math_aggregator import (
-    aggregate, save_math_report, render_markdown, save_markdown,
+    aggregate, save_math_report,
 )
 from rich.console import Console
 
@@ -16,7 +16,7 @@ doi = "SciPostPhys.21.1.011"
 
 report = aggregate(doi)
 json_path = save_math_report(report)
-md_path = save_markdown(report)
+# md_path removed - math markdown no longer generated
 
 console.rule(f"[bold cyan]Math Report — {doi}[/bold cyan]")
 console.print(f"[bold]Verdict:[/bold] [magenta]{report.verdict}[/magenta]")
