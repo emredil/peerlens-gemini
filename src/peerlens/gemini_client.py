@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,6 +126,54 @@ def _attempt_partial_json(text: str) -> dict:
         return json.loads(salvaged)
     except json.JSONDecodeError:
         return {"findings": []}
+
+
+
+# ---------------------------------------------------------------------------
+# Transient-error retry
+# ---------------------------------------------------------------------------
+_TRANSIENT_MARKERS = (
+    "503", "500", "429",
+    "unavailable", "overloaded", "internal error",
+    "deadline_exceeded", "resource_exhausted",
+    "the model is overloaded",
+)
+
+
+def _is_transient(exc: Exception) -> bool:
+    """True if the exception looks like a temporary Google-side hiccup."""
+    msg = str(exc).lower()
+    if any(m in msg for m in _TRANSIENT_MARKERS):
+        return True
+    # google.genai.errors.ServerError has a status_code attribute
+    code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if code in (500, 502, 503, 504, 429):
+        return True
+    return False
+
+
+def _call_with_retry(fn, *args, max_attempts: int = 6, base_delay: float = 1.0, **kwargs):
+    """Call fn(*args, **kwargs) with exponential backoff on transient errors.
+
+    Non-transient errors (400 / 401 / 403 / 404 / etc.) raise immediately.
+    Waits: base * 2**attempt with +/-25%% jitter. With defaults, worst case
+    total wait is ~63 s across 6 attempts.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient(exc):
+                raise
+            if attempt == max_attempts - 1:
+                break
+            delay = base_delay * (2 ** attempt)
+            delay *= 0.75 + random.random() * 0.5  # +/-25%% jitter
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 class GeminiClient:
@@ -375,7 +424,8 @@ class GeminiClient:
                 data=pdf_bytes,
             ))
         parts.append(types.Part(text=user))
-        resp = self._client.models.generate_content(
+        resp = _call_with_retry(
+            self._client.models.generate_content,
             model=model,
             contents=[types.Content(role="user", parts=parts)],
             config=config,

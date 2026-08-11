@@ -138,13 +138,15 @@ def run_one(doi: str, pdf_path: Path, client: GeminiClient, *, check_llm: bool =
                 aggregate_and_render_full(doi)
             stages_done.append("llm_detection")
 
-        triage_path = get_path("processed_data") / "triage_scores" / f"{doi}.json"
-        triage = json.loads(triage_path.read_text())
+        domain_path = get_path("processed_data") / "domain_reports" / f"{doi}.json"
+        domain = json.loads(domain_path.read_text()) if domain_path.exists() else {}
         return {
             "doi": doi,
             "status": "ok",
-            "score": triage.get("score", 0),
-            "verdict": triage.get("verdict", "unknown"),
+            "verdict": domain.get("verdict", "unknown"),
+            "n_findings": domain.get("n_findings"),
+            "n_critical": domain.get("n_critical"),
+            "n_warning": domain.get("n_warning"),
             "llm_verdict": llm_verdict,
             "llm_confidence": llm_confidence,
             "elapsed_s": round(time.time() - t0, 1),
@@ -215,10 +217,15 @@ def main():
         summary = run_one(doi, pdf_path, client, check_llm=args.check_llm)
         summaries.append(summary)
         if summary["status"] == "ok":
-            v = summary["verdict"]
-            color = {"priority": "green", "standard": "yellow", "reject": "red"}.get(v, "white")
-            console.print(f"  → [{color}]{v.upper()}[/{color}] "
-                          f"(score {summary['score']}/100)  {summary['elapsed_s']}s")
+            v = (summary.get("verdict") or "unknown").lower()
+            color = {
+                "accept": "green",
+                "minor revision": "yellow",
+                "major revision": "red",
+                "reject": "red",
+                "unknown": "white",
+            }.get(v, "white")
+            console.print(f"  → [{color}]{v.upper()}[/{color}]  {summary['elapsed_s']}s")
         else:
             console.print(f"  → [red]FAILED[/red] {summary.get('error_type','?')}: "
                           f"{summary.get('error_msg','')[:120]}")
@@ -229,12 +236,15 @@ def main():
     console.print(f"Summary written to: {args.summary_out}")
 
     n_ok = sum(1 for s in summaries if s.get("status") == "ok")
-    n_priority = sum(1 for s in summaries if s.get("verdict") == "priority")
-    n_standard = sum(1 for s in summaries if s.get("verdict") == "standard")
-    n_reject = sum(1 for s in summaries if s.get("verdict") == "reject")
+    def _count(v):
+        return sum(1 for s in summaries if (s.get("verdict") or "").lower() == v)
+    n_accept = _count("accept")
+    n_minor  = _count("minor revision")
+    n_major  = _count("major revision")
+    n_reject = _count("reject")
     n_failed = sum(1 for s in summaries if s.get("status") == "failed")
-    console.print(f"Processed: {n_ok}  |  priority: {n_priority}  "
-                  f"standard: {n_standard}  reject: {n_reject}  failed: {n_failed}")
+    console.print(f"Processed: {n_ok}  |  accept: {n_accept}  minor: {n_minor}  "
+                  f"major: {n_major}  reject: {n_reject}  failed: {n_failed}")
 
     # Refresh the editorial dashboard via subprocess (isolates import scope).
     import subprocess
