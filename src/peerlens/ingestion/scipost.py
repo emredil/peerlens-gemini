@@ -167,26 +167,56 @@ def fetch_batch(journal: str = "SciPostPhys", n: int = 10, download_pdfs: bool =
 # =========================================================================
 
 def _parse_submission_id(url: str) -> tuple[str, int]:
-    m = re.search(r"(scipost_\d+_\d+)v(\d+)", url)
+    """Return (base_id, version) from a submission URL.
+
+    Supports two thread ID formats used by SciPost:
+      * scipost_YYYYMM_NNNNN v<int>      (native SciPost submissions)
+      * <preprint-doi-or-arxiv-id> v<int> (e.g. ChemRxiv, arXiv)
+
+    The base_id is everything before the trailing "v<int>/" segment.
+    Returns ("", 0) if the URL doesn't end in a versioned segment.
+    """
+    m = re.search(r"/submissions/(.+?)v(\d+)/?$", url.rstrip("/") + "/")
     if not m:
         return "", 0
     return m.group(1), int(m.group(2))
 
 
 def discover_all_versions(submission_url: str) -> list[str]:
-    """Find all versions (v1, v2, ...) of a submission thread."""
+    """Find all versions (v1, v2, ...) of a submission thread.
+
+    Strategy: fetch the given submission page and scrape every
+    /submissions/<base_id>v<N>/ link found in the HTML. If a paper has been
+    resubmitted from a preprint into SciPost's own numbering (thread crosses
+    ChemRxiv -> scipost_ IDs, or vice versa), the accepted-version page
+    still links to all sibling versions across both IDs, so we collect
+    them all.
+    """
     with httpx.Client(headers=HEADERS, timeout=30.0) as client:
         resp = client.get(f"{BASE_URL}{submission_url}")
         resp.raise_for_status()
         html = resp.text
 
     base_id, _ = _parse_submission_id(submission_url)
-    if not base_id:
-        return [submission_url]
 
-    pattern = rf"/submissions/{base_id}v(\d+)/"
-    versions = sorted({int(v) for v in re.findall(pattern, html)})
-    return [f"/submissions/{base_id}v{v}/" for v in versions]
+    # Collect every distinct /submissions/<something>v<N>/ URL in the HTML.
+    # A submission page only lists URLs from its own thread, so we do NOT
+    # filter by base_id — the same thread can span multiple ID formats
+    # (e.g. ChemRxiv preprint DOI in early versions, SciPost native ID
+    # after resubmission).
+    urls: set[str] = set()
+    for m in re.finditer(r'href="(/submissions/[^"#]+v\d+/)', html):
+        urls.add(m.group(1))
+
+    # Always include the URL we started from (accepted version), just in case
+    # its own link isn't self-referenced in the HTML.
+    urls.add(submission_url if submission_url.endswith("/") else submission_url + "/")
+
+    # Sort by trailing v<N> so we return oldest-first.
+    def _sort_key(u: str) -> int:
+        m = re.search(r"v(\d+)/?$", u)
+        return int(m.group(1)) if m else 0
+    return sorted(urls, key=_sort_key)
 
 
 def fetch_reports_for_publication(record: PublicationRecord) -> dict:
