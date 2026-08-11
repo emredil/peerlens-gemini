@@ -23,11 +23,26 @@ from rich.console import Console
 console = Console()
 
 
-def main(n: int) -> None:
+def main(n: int, older_than_days: int = 60) -> None:
     console.rule(f"[bold cyan]PeerLens eLife batch: {n} reviewed preprints[/bold cyan]")
 
     console.print(f"\n[cyan]Step 1[/cyan] Fetching metadata from eLife API...")
-    papers: list[ElifePaper] = list(list_reviewed_preprints(max_records=n))
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    papers: list[ElifePaper] = []
+    for p in list_reviewed_preprints(max_records=n * 10):
+        try:
+            pub_date = datetime.fromisoformat(p.published.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if pub_date > cutoff:
+            continue
+        if not (p.assessment_text or "").strip():
+            continue
+        papers.append(p)
+        if len(papers) >= n:
+            break
+    console.print(f"[dim]Filtered to {len(papers)} papers older than {older_than_days} days with non-empty assessment[/dim]")
     console.print(f"[green]OK[/green] {len(papers)} papers")
 
     console.print(f"\n[cyan]Step 2[/cyan] Saving metadata + eLife assessments...")
@@ -63,4 +78,4 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--n", type=int, default=20, help="Number of papers to fetch")
     args = p.parse_args()
-    main(args.n)
+    main(args.n, older_than_days=args.older_than_days)
